@@ -1,0 +1,8 @@
+torchrl
+tensordict
+vmas
+pettingzoo[mpe]==1.24.3
+tqdm
+matplotlib
+torchvision
+pyyaml

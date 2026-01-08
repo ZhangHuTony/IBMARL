@@ -1,0 +1,1 @@
+Using https://docs.pytorch.org/rl/0.4/tutorials/multiagent_competitive_ddpg.html as a reference
