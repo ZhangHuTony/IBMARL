@@ -13,6 +13,7 @@ def load_config(scenario_name: str, exp_type: str) -> dict:
     Loads and merge yaml configuration files based on scenario name and experiment type.
     """
 
+
     # Load base config
     base_config_path = Path("config/base.yaml")
     print(f"Loading base config from: {base_config_path.absolute()}")
@@ -38,6 +39,9 @@ def load_config(scenario_name: str, exp_type: str) -> dict:
     print("Final merged training params:", config.get('training', {}))
     config['total_frames'] = config.get('frames_per_batch', 1000) * config.get('n_iters', 10)
 
+    config['scenario_name'] = scenario_name
+    config['exp_type'] = exp_type
+    print(config)
     return config
 
 def run_experiment(cfg):

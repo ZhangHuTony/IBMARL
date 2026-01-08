@@ -9,8 +9,8 @@ class BaseExperiment:
         self.config = config
         self.results = self._init_results()
         self._setup_seed()
-        self._setup_policy()
-        self._setup_critic()
+
+
 
     def _setup_seed(self):
         self.seed = self.config.get('seed', None) 

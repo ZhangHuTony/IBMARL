@@ -1,7 +1,7 @@
-from torchrl.envs import VmasEnv, TransformedEnv
+from torchrl.envs import VmasEnv, TransformedEnv, check_env_specs
 from torchrl.envs.transforms import RewardSum
 
-from transforms.registry import build_transforms
+from src.environment.transforms.registry import build_transforms
 
 def make_env(config: dict, device) -> TransformedEnv:
     """
@@ -24,6 +24,8 @@ def make_env(config: dict, device) -> TransformedEnv:
         continuous_actions= True,
         **scenario_kwargs(config),
     )
+
+    print(f"base group map: {base_env.group_map}")
 
     # Wrap the environment with transforms  
     env = TransformedEnv(base_env)
