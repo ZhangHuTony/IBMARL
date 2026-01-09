@@ -4,6 +4,7 @@ Main script to run experiments for the IBMARL project.
 import argparse
 from pathlib import Path
 import yaml
+import matplotlib.pyplot as plt
 
 from src.experiment_registry import EXPERIMENT_REGISTRY
 
@@ -65,6 +66,22 @@ def run_experiment(cfg):
     results = experiment.train()
     return results
 
+def plot(cfg, rewards, group_map):
+    fig, axs = plt.subplots(len(group_map), 1, figsize=(6, 4 * len(group_map)))
+
+    # Make axs iterable when there is only one group
+    if len(group_map) == 1:
+        axs = [axs]
+
+    for i, group in enumerate(group_map):
+        axs[i].plot(rewards[group], label=f"Episode reward mean {group}")
+        axs[i].set_ylabel("Reward")
+        axs[i].legend()
+
+    axs[-1].set_xlabel("Training iterations")
+    plt.tight_layout()
+    plt.show()
+
 
 if __name__ == "__main__":
 
@@ -82,4 +99,7 @@ if __name__ == "__main__":
     cfg = load_config(args.scenario_name, args.exp_type)
 
     # Run the experiment
-    results = run_experiment(cfg)
+    rewards, group_map = run_experiment(cfg)
+
+    plot(cfg, rewards, group_map)
+

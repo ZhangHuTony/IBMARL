@@ -28,11 +28,18 @@ def make_env(config: dict, device) -> TransformedEnv:
     print(f"base group map: {base_env.group_map}")
 
     # Wrap the environment with transforms  
-    env = TransformedEnv(base_env)
+    env = TransformedEnv(
+        base_env,
+        RewardSum(
+            in_keys = base_env.reward_keys,
+            reset_keys=["_reset"] * len(base_env.group_map.keys())
+        ),
+    )
 
     for tr in build_transforms(config):
         env.append_transform(tr)
     
+    print(check_env_specs(env))
     return env
 
 

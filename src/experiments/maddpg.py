@@ -69,19 +69,19 @@ class MaddpgExperiment(BaseMARLExperiment):
         policies = {}
 
         for group, _agents in self.env.group_map.items():
+            low = self.env.full_action_spec_unbatched[group, "action"].space.low.to(self.device)
+            high = self.env.full_action_spec_unbatched[group, "action"].space.high.to(self.device)
+
             policy = ProbabilisticActor(
                 module=policy_modules[group],
                 spec=self.env.full_action_spec[group, "action"],
-                in_keys = [(group, "param")],
-                out_keys = [(group, "action")],
-                distribution_class = TanhDelta,
-                distribution_kwargs = {
-                    "low": self.env.full_action_spec[group, "action"].space.low,
-                    "high": self.env.full_action_spec[group, "action"].space.high,
-                },
-                return_log_prob = False,
-
+                in_keys=[(group, "param")],
+                out_keys=[(group, "action")],
+                distribution_class=TanhDelta,
+                distribution_kwargs={"low": low, "high": high},
+                return_log_prob=False,
             )
+
             policies[group] = policy
         
         #exploration policies
@@ -175,9 +175,13 @@ class MaddpgExperiment(BaseMARLExperiment):
 
                 for _ in range(self.config.get('training').get('n_optimiser_steps')):
                     minibatch = self.replay_buffers[group].sample()
+
+
                     loss_vals = self.losses[group](minibatch)
 
                     for loss_name in ["loss_actor", "loss_value"]:
+                        
+
                         loss = loss_vals[loss_name]
                         
                         optimiser = self.optimisers[group][loss_name]
@@ -194,7 +198,7 @@ class MaddpgExperiment(BaseMARLExperiment):
                     self.target_updaters[group].step()
 
                     # Annealing update for exploration noise
-                self.exploration_policies[group].step(current_frames)
+                self.exploration_policies[group][-1].step(current_frames)
             
             if iteration == self.config.get("horizon"):
                 del train_group_map["agent"] #idk how deleting stops the training of that group but it does
@@ -221,6 +225,8 @@ class MaddpgExperiment(BaseMARLExperiment):
                 refresh=False
             )
             pbar.update()
+    
+        return episode_reward_mean_map, self.env.group_map.keys()
 
 
 
@@ -288,7 +294,7 @@ class MaddpgExperiment(BaseMARLExperiment):
                 "loss_actor": torch.optim.Adam(
                     loss.actor_network_params.flatten_keys().values(), lr = float(self.config.get('training').get('lr'))
                 ),
-                "loss_critic": torch.optim.Adam(
+                "loss_value": torch.optim.Adam(
                     loss.value_network_params.flatten_keys().values(), lr = float(self.config.get('training').get('lr'))
                 )
             }
