@@ -11,7 +11,6 @@ from torchrl.modules import (
     ProbabilisticActor,
     TanhDelta,
     AdditiveGaussianModule,
-    AdditiveGaussianWrapper
 )
 
 from torchrl.collectors import SyncDataCollector
@@ -19,8 +18,15 @@ from torchrl.data import LazyMemmapStorage, RandomSampler, ReplayBuffer
 from torchrl.objectives import DDPGLoss, ValueEstimators, SoftUpdate
 
 from tensordict.nn import TensorDictModule, TensorDictSequential
+from pathlib import Path
+
+
+from torchrl.envs import TransformedEnv, ExplorationType, set_exploration_type
+from torchrl.record import CSVLogger, PixelRenderTransform, VideoRecorder
+
 
 class MaddpgExperiment(BaseMARLExperiment):
+
     def __init__(self, config):
         super().__init__(config)
 
@@ -33,6 +39,7 @@ class MaddpgExperiment(BaseMARLExperiment):
         self.replay_buffers = self._setup_replay_buffer()
 
         self.losses, self.target_updaters, self.optimisers = self._setup_loss_functions()
+
 
 
 
@@ -230,10 +237,6 @@ class MaddpgExperiment(BaseMARLExperiment):
 
 
 
-    def evaluate(self):
-        print("Evaluating MADDPG Experiment...")
-        # Implement MADDPG evaluation logic here
-        pass
 
     def _setup_data_collection(self):
         # setup data collection logic here
@@ -327,3 +330,47 @@ class MaddpgExperiment(BaseMARLExperiment):
                     .expand((*group_shape, 1)),
                 )
         return batch
+    
+
+    def render(self):
+
+        results_dir = Path("results")
+        results_dir.mkdir(exist_ok=True)
+
+
+        video_logger = CSVLogger(
+            exp_name="vmas_logs",
+            log_dir=str(results_dir),
+            video_format="mp4",
+        )
+
+        print("Creating rendering env")
+        env_with_render = TransformedEnv(self.env.base_env, self.env.transform.clone())
+
+        env_with_render = env_with_render.append_transform(
+            PixelRenderTransform(
+                out_keys=["pixels"],
+                preproc=lambda x: x.copy(),  # fix negative stride issue
+                as_non_tensor=True,
+                mode="rgb_array",
+            )
+        )
+
+        env_with_render = env_with_render.append_transform(
+            VideoRecorder(logger=video_logger, tag="vmas_rendered")
+        )
+
+        # deterministic policy (no exploration noise)
+        render_policy = TensorDictSequential(*self.policies.values())
+        render_policy.eval()
+
+        with torch.no_grad():
+            with set_exploration_type(ExplorationType.MODE):
+                print("Rendering rollout...")
+                env_with_render.rollout(200, policy=render_policy)
+
+        print("Saving video...")
+        env_with_render.transform.dump()
+
+        print("Saved! Video location:")
+        video_logger.print_log_dir()

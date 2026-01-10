@@ -6,16 +6,17 @@ import torch
 from torch import multiprocessing
 
 
-from src.base_experiment import BaseExperiment
 from src.environment.make_env import make_env
 
 
-class BaseMARLExperiment(BaseExperiment):
+class BaseMARLExperiment:
     def __init__(self, config):
-        super().__init__(config)
 
+        self.config = config
         #device setup
         self.device = self._setup_device()
+
+        self._setup_device
         
         self.env = make_env(config, self.device)
 
@@ -30,4 +31,16 @@ class BaseMARLExperiment(BaseExperiment):
         )
 
         return device
+    
+
+    def _setup_seed(self):
+        self.seed = self.config.get('seed', None) 
+
+        if self.seed is not None:
+            torch.manual_seed(self.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(self.seed)
+            print(f"Random seed set to: {self.seed}")
+
+
     

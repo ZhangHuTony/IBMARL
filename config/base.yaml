@@ -2,19 +2,19 @@
 
 #common parameters
 seed: 42
-frames_per_batch: 1000 #number of team frames collected per sampling iteration
-n_iters: 10 #number of sampling and training iterations
+frames_per_batch: 10000 #number of team frames collected per sampling iteration
+n_iters: 5 #number of sampling and training iterations
 memory_size: 1000000 # replay buffer of each group can store this many frames
 horizon: 100
 sparse_rewards: False #whether to use sparse rewards
 
 #Training Hyperparameters
 training:
-  train_batch_size: 128 #number of team frames sampled from replay buffer for each training iteration
+  train_batch_size: 1000 #number of team frames sampled from replay buffer for each training iteration
   lr: 3e-4 #learning rate for optimizers
   max_grad_norm: 1.0 #max norm for gradients
   n_optimiser_steps: 100 #number of optimizer steps per training iteration
   
   # DDPG 
   gamma: 0.99 #discount factor
-  polyak_tau: 0.01 #target network update rate
+  polyak_tau: 0.0001 #target network update rate

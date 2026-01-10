@@ -64,6 +64,9 @@ def run_experiment(cfg):
 
     experiment = ExperimentClass(cfg)
     results = experiment.train()
+
+    if cfg.get("render"):
+        experiment.render()
     return results
 
 def plot(cfg, rewards, group_map):
@@ -91,15 +94,19 @@ if __name__ == "__main__":
     parser.add_argument("scenario_name", type=str, help="Name of the VMAS scenario to run")
     parser.add_argument("exp_type", type=str, help= "ID for experiment")
 
+
     #Optional Arguments (can override YAML)
+    parser.add_argument("--render", action="store_true", help="Enable rendering")
 
     args = parser.parse_args()
 
     # Load configuration
     cfg = load_config(args.scenario_name, args.exp_type)
 
+    cfg["render"] = bool(args.render)
     # Run the experiment
     rewards, group_map = run_experiment(cfg)
 
     plot(cfg, rewards, group_map)
 
+    
