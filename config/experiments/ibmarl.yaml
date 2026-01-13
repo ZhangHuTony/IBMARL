@@ -1,0 +1,7 @@
+
+#additional config needed for IBMARL
+#Inherit from the base configuration
+extends: "../base.yaml"
+
+#IL Policy
+r2bc_checkpoint_path : "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260112_204052/policy_checkpoint.pth"

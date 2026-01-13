@@ -14,7 +14,7 @@ training:
   lr: 3e-4 #learning rate for optimizers
   max_grad_norm: 1.0 #max norm for gradients
   n_optimiser_steps: 100 #number of optimizer steps per training iteration
-  
+  checkpoint_interval: 10 #number of iterations between saving policy checkpoint
   # DDPG 
   gamma: 0.99 #discount factor
   polyak_tau: 0.0001 #target network update rate
