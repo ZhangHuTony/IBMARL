@@ -232,8 +232,11 @@ class MaddpgExperiment(BaseMARLExperiment):
                 refresh=False
             )
             pbar.update()
-    
-        return episode_reward_mean_map, self.env.group_map.keys()
+
+        self.results["group_map_keys"] = self.env.group_map.keys()
+        self.results["episode_reward_mean_map"] = episode_reward_mean_map
+
+        
 
 
 
@@ -331,8 +334,10 @@ class MaddpgExperiment(BaseMARLExperiment):
                 )
         return batch
     
+    def save_checkpoint(self):
+        raise NotImplementedError
 
-    def render(self):
+    def render_policy(self):
 
         results_dir = Path("results")
         results_dir.mkdir(exist_ok=True)
