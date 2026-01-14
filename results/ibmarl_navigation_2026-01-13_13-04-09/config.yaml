@@ -19,9 +19,9 @@ r2bc_checkpoint_path: /home/tony-zhang/Research/R2BC/results/navigation_r2bc_dec
 scenario_name: navigation
 exp_type: ibmarl
 render: false
-run_name: ibmarl_navigation_2026-01-12_20-51-12
-run_dir: results/ibmarl_navigation_2026-01-12_20-51-12
-data_dir: results/ibmarl_navigation_2026-01-12_20-51-12/data
-check_dir: results/ibmarl_navigation_2026-01-12_20-51-12/checkpoints
-videos_dir: results/ibmarl_navigation_2026-01-12_20-51-12/videos
-plots_dir: results/ibmarl_navigation_2026-01-12_20-51-12/plots
+run_name: ibmarl_navigation_2026-01-13_13-04-09
+run_dir: results/ibmarl_navigation_2026-01-13_13-04-09
+data_dir: results/ibmarl_navigation_2026-01-13_13-04-09/data
+check_dir: results/ibmarl_navigation_2026-01-13_13-04-09/checkpoints
+videos_dir: results/ibmarl_navigation_2026-01-13_13-04-09/videos
+plots_dir: results/ibmarl_navigation_2026-01-13_13-04-09/plots
