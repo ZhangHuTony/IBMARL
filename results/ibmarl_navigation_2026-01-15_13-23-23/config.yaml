@@ -1,0 +1,27 @@
+seed: 42
+frames_per_batch: 10000
+n_iters: 5
+memory_size: 1000000
+horizon: 100
+sparse_rewards: false
+training:
+  train_batch_size: 1000
+  lr: 3e-4
+  max_grad_norm: 1.0
+  n_optimiser_steps: 100
+  checkpoint_interval: 10
+  gamma: 0.99
+  polyak_tau: 0.0001
+extends: ../base.yaml
+n_agents: 3
+total_frames: 50000
+r2bc_checkpoint_path: /home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260112_204052/policy_checkpoint.pth
+scenario_name: navigation
+exp_type: ibmarl
+render: false
+run_name: ibmarl_navigation_2026-01-15_13-23-23
+run_dir: results/ibmarl_navigation_2026-01-15_13-23-23
+data_dir: results/ibmarl_navigation_2026-01-15_13-23-23/data
+check_dir: results/ibmarl_navigation_2026-01-15_13-23-23/checkpoints
+videos_dir: results/ibmarl_navigation_2026-01-15_13-23-23/videos
+plots_dir: results/ibmarl_navigation_2026-01-15_13-23-23/plots

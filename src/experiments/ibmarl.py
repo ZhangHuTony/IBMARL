@@ -10,6 +10,8 @@ import torch
 import copy
 import itertools
 
+import torch.nn.functional as F
+
 from tqdm import tqdm
 
 
@@ -64,6 +66,8 @@ class IbmarlExperiment(BaseMARLExperiment):
 
         self.critics = self._setup_critic()
 
+        self.target_policies, self.target_critics = self._setup_target_networks()
+
         self.agents_exploration_policy, self.collector = self._setup_data_collection()
 
 
@@ -76,7 +80,8 @@ class IbmarlExperiment(BaseMARLExperiment):
 
     def train(self):
         print("Training IBMARL Experiment...")
-        
+        tau = float(self.config["training"]["polyak_tau"])
+
         pbar = tqdm(
             total= self.config.get('n_iters'),
             desc = ", ".join(
@@ -120,8 +125,10 @@ class IbmarlExperiment(BaseMARLExperiment):
 
                     for loss_name in ["loss_actor", "loss_value"]:
                         
-
-                        loss = loss_vals[loss_name]
+                        if loss_name == "loss_value":
+                            loss = self.ibmarl_value_loss(group, minibatch)
+                        else:
+                            loss = loss_vals[loss_name]
                         
                         optimiser = self.optimisers[group][loss_name]
 
@@ -132,9 +139,13 @@ class IbmarlExperiment(BaseMARLExperiment):
                         torch.nn.utils.clip_grad_norm_(params, self.config.get('training').get('max_grad_norm'))
 
                         optimiser.step()
+
                         optimiser.zero_grad()
 
-                    self.target_updaters[group].step()
+                    # self.target_updaters[group].step() #should I keep this as an ablation?
+                    self.polyak_update_(self.policies[group], self.target_policies[group], tau)
+                    self.polyak_update_(self.critics[group],  self.target_critics[group],  tau)
+
 
                     # Annealing update for exploration noise
                 self.exploration_policies[group][-1].step(current_frames)
@@ -477,9 +488,11 @@ class IbmarlExperiment(BaseMARLExperiment):
 
             losses[group] = loss_module
         
-        target_updater = {
-            group: SoftUpdate(loss, tau= self.config.get('training').get('polyak_tau')) for group, loss in losses.items()
-        }
+        #target_updater = {
+        #    group: SoftUpdate(loss, tau= self.config.get('training').get('polyak_tau')) for group, loss in losses.items() #keep for ablations?
+        #}
+
+        target_updater = None
 
         optimisers = {
             group: {
@@ -520,3 +533,110 @@ class IbmarlExperiment(BaseMARLExperiment):
                 )
         return batch
     
+    def _setup_target_networks(self):
+
+        target_policies =  {g: copy.deepcopy(self.policies[g]).eval() for g in self.env.group_map.keys()}
+        target_critics =   {g: copy.deepcopy(self.critics[g]).eval() for g in self.env.group_map.keys()}
+
+        for g in self.env.group_map.keys():
+            for p in target_policies[g].parameters():
+                p.requires_grad_(False)
+            for p in target_critics[g].parameters():
+                p.requires_grad_(False)
+        
+        return target_policies, target_critics
+
+    @torch.no_grad()
+    def polyak_update_(self, source: torch.nn.Module, target: torch.nn.Module, tau: float):
+        for p, p_targ in zip(source.parameters(), target.parameters()):
+            p_targ.data.mul_(1.0 - tau).add_(tau * p.data)
+
+
+    @torch.no_grad()
+    def best_next_act_comb(self, group: str, next_obs: torch.Tensor) -> torch.Tensor:
+        '''
+        Used for bootstrap proposal
+        '''
+
+        B, N, obs_dim = next_obs.shape
+        act_dim = self.env.full_action_spec[group, "action"].shape[-1]
+
+        #IL candidate
+        a_il = self.il_action(group, next_obs)
+        a_il = torch.clamp(a_il, -1.0, 1.0) #still not sure if this is the right thing to do
+
+        #target RL-candidate
+        td_pi = TensorDict({(group, "observation"): next_obs}, batch_size=[B], device = next_obs.device)
+        td_pi = self.target_policies[group](td_pi)
+        a_rl = td_pi[(group, "action")]
+
+        #build all combinations
+        cand = torch.stack([a_il, a_rl], dim=0)
+        choices = list(itertools.product([0,1], repeat=N))
+        K = len(choices)
+
+        joint=[]
+        for choice in choices:
+            a_k = torch.stack([cand[choice[i], :, i, :] for i in range(N)], dim = 1)
+            joint.append(a_k)
+        joint = torch.stack(joint, dim=0)
+
+        #score each combination
+        td_q = TensorDict(
+            {
+                (group, "observation"): next_obs.unsqueeze(0).expand(K, B, N, obs_dim),
+                (group, "action"): joint,
+            },
+            batch_size=[K,B],
+            device = next_obs.device,
+        )
+
+        q = self.target_critics[group](td_q)[(group, "state_action_value")]
+
+        if q.dim() == 4:
+            q_tot = q.sum(dim=2).squeeze(-1)
+        elif q.dim() == 3:
+            q_tot = q.squeeze(-1)
+        else:
+            raise RuntimeError(f"Unexpected target critic output shape: {list(q.shape)}")
+        
+        best_k = torch.argmax(q_tot, dim = 0)
+        a_next_star = joint[best_k, torch.arange(B, device = next_obs.device)]
+        return a_next_star
+    
+
+    def ibmarl_value_loss(self, group:str, mb: TensorDictBase) -> torch.Tensor:
+        '''
+        returns loss using bootstrap proposal
+        '''
+
+        obs     = mb[(group, "observation")]
+        act     = mb[(group, "action")]
+        rew     = mb[("next", group, "reward")]
+        done    = mb[("next", group, "done")]
+        next_obs= mb[("next", group, "observation")]
+
+        gamma = float(self.config["training"]["gamma"])
+
+        #current Q
+        td_cur = TensorDict({(group, "observation"): obs, (group, "action"): act}, batch_size=[obs.shape[0]], device=obs.device)
+        q = self.critics[group](td_cur)[(group, "state_action_value")]
+
+        #target calculation
+        with torch.no_grad():
+            a_next_star = self.best_next_act_comb(group, next_obs)
+            td_n = TensorDict({(group, "observation"): next_obs, (group, "action"): a_next_star},
+                                batch_size=[next_obs.shape[0]], device=next_obs.device)
+            q_next = self.target_critics[group](td_n)[(group, "state_action_value")]
+
+            y = rew + gamma * (1.0-done.float()) * q_next
+        
+
+        #ensure dimensions align:
+        if q.dim() == 2 and y.dim() == 3:
+            y_red = y.sum(dim=1)
+            loss = F.mse_loss(q, y_red)
+        else:
+            loss = F.mse_loss(q,y)
+        
+        return loss
