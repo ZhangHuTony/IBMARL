@@ -1,0 +1,26 @@
+seed: 42
+frames_per_batch: 10000
+n_iters: 100
+memory_size: 1000000
+horizon: 100
+sparse_rewards: false
+training:
+  train_batch_size: 1024
+  lr: 3e-4
+  max_grad_norm: 1.0
+  n_optimiser_steps: 100
+  checkpoint_interval: 10
+  gamma: 0.99
+  polyak_tau: 0.0005
+extends: ../base.yaml
+n_agents: 3
+total_frames: 1000000
+scenario_name: navigation
+exp_type: maddpg
+render: false
+run_name: maddpg_navigation_2026-01-15_21-06-43
+run_dir: results/maddpg_navigation_2026-01-15_21-06-43
+data_dir: results/maddpg_navigation_2026-01-15_21-06-43/data
+check_dir: results/maddpg_navigation_2026-01-15_21-06-43/checkpoints
+videos_dir: results/maddpg_navigation_2026-01-15_21-06-43/videos
+plots_dir: results/maddpg_navigation_2026-01-15_21-06-43/plots

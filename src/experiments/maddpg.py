@@ -207,8 +207,8 @@ class MaddpgExperiment(BaseMARLExperiment):
                     # Annealing update for exploration noise
                 self.exploration_policies[group][-1].step(current_frames)
             
-            if iteration == self.config.get("horizon"):
-                del train_group_map["agent"] #idk how deleting stops the training of that group but it does
+            #if iteration == self.config.get("horizon"):
+              #  del train_group_map["agent"] #idk how deleting stops the training of that group but it does
 
             # Logging
             for group in self.env.group_map.keys():

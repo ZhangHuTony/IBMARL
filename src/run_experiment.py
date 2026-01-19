@@ -71,8 +71,9 @@ def create_run_dirs(cfg: dict):
     plots_dir = run_dir / "plots"
 
 
-    for d in (data_dir, check_dir, videos_dir, plots_dir):
-        d.mkdir(parents=True, exist_ok=False)
+    # modify so that it makes the directories after training
+    #for d in (data_dir, check_dir, videos_dir, plots_dir):
+     #   d.mkdir(parents=True, exist_ok=False)
 
     
     cfg["run_name"] = run_name
