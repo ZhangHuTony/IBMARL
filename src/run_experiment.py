@@ -84,9 +84,9 @@ def create_run_dirs(cfg: dict):
     cfg["plots_dir"] = str(plots_dir)
 
     # Save the exact merged config used for this run
-    config_out = run_dir / "config.yaml"
-    with open(config_out, "w") as f:
-        yaml.safe_dump(cfg, f, sort_keys=False)
+    #config_out = run_dir / "config.yaml"
+    #with open(config_out, "w") as f:
+     #   yaml.safe_dump(cfg, f, sort_keys=False)
 
     print(f"Run directory created: {run_dir.resolve()}")
     return cfg

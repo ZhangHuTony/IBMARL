@@ -20,10 +20,12 @@ from tensordict.nn import TensorDictModule, TensorDictSequential
 
 class R2bcPolicy():
     def __init__(self, policy_path, env, device):
-        self.policy = DecentralizedMiniBC.load_checkpoint(str(policy_path), device = device)
-        self.policy.eval()
+
+        self.device = device
         self.env = env
-        
+
+        self.policy = self._load_policy(policy_path)
+
         self._smoke_test_il_policy()
 
     def get_action(self, group:str, obs: torch.Tensor) -> torch.Tensor:
@@ -33,6 +35,12 @@ class R2bcPolicy():
         act_dim = self.env.full_action_spec[group, 'action'].shape[-1]
         a = a_cat.reshape(B, N, act_dim)
         return torch.clamp(a, -1.0, 1.0)
+    
+    def _load_policy(self, policy_path):
+
+        print("Loading IL Policy...")
+        policy = DecentralizedMiniBC.load_checkpoint(str(policy_path), device = self.device)
+        return policy.eval()
     
         
     @torch.no_grad()
@@ -48,20 +56,11 @@ class R2bcPolicy():
 
             obs = torch.randn(B, N, obs_dim, device=self.device)
 
-            # concat to [B, N*obs_dim]
-            x = obs.reshape(B, N * obs_dim)
 
-            a_cat = self.il_policy(x)  # [B, N*?]
-            if a_cat.shape[0] != B or a_cat.dim() != 2:
-                raise RuntimeError(f"Unexpected IL output shape {a_cat.shape}")
+            a = self.get_action(group, obs)  # [B, N*?]
+            if a.shape != (B, N, act_dim):
+                raise RuntimeError(f"Unexpected IL output shape {a.shape}, expected {(B, N, act_dim)}")
 
-            if a_cat.shape[1] != N * act_dim:
-                raise RuntimeError(
-                    f"IL action dim mismatch. IL outputs {a_cat.shape[1]} per batch, "
-                    f"but env expects N*act_dim={N*act_dim} (N={N}, act_dim={act_dim})."
-                )
-
-            a = a_cat.reshape(B, N, act_dim)
             print(f"[IL OK] group={group}: obs {list(obs.shape)} -> act {list(a.shape)}")
 
 

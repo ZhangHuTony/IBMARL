@@ -36,24 +36,9 @@ from torchrl.record import CSVLogger, PixelRenderTransform, VideoRecorder
 
 
 from src.experiments.ibmarl.networks import R2bcPolicy, build_rl_policies, build_critics, build_targets
+from src.experiments.ibmarl.modules import OverWriteActionWithBestComb
+from src.experiments.ibmarl.losses import GroupTrainer
 
-
-class OverWriteActionWithBestComb(torch.nn.Module):
-    def __init__(self, parent, group:str):
-        super().__init__()
-        self.parent = parent
-        self.group = group
-
-    @torch.no_grad()
-    def forward(self, td):
-        g = self.group
-        obs = td[(g,"observation")]
-        a_rl = td[(g, "action")]
-
-        a_exec = self.parent.best_act_comb(g, obs, a_rl)
-
-        td[(g, "action")] = a_exec
-        return td
 
 class IbmarlExperiment(BaseMARLExperiment):
     def __init__(self, config):
@@ -76,7 +61,7 @@ class IbmarlExperiment(BaseMARLExperiment):
 
         self.replay_buffers = self._setup_replay_buffer()
 
-        self.losses, self.target_updaters, self.optimisers = self._setup_loss_functions()
+        self.trainer = GroupTrainer(config, self.policies, self.critics, self.target_policies, self.target_critics, self.env)
 
 
 
@@ -123,31 +108,11 @@ class IbmarlExperiment(BaseMARLExperiment):
                     # print("next_obs", minibatch[("next","agents","observation")].shape)
                     # print("act", minibatch[("agents","action")].shape)
 
-                   # --- compute losses manually ---
-                    loss_actor = self.ibmarl_actor_loss(group, minibatch)
-                    loss_value = self.ibmarl_value_loss(group, minibatch)
+                    self.trainer.update(group, minibatch) #TODO: save returns
 
+                    self.trainer.polyak_step(self.policies[group], self.target_policies[group])
+                    self.trainer.polyak_step(self.critics[group], self.target_critics[group])
                     
-
-                    # --- actor step ---
-                    opt_actor = self.optimisers[group]["loss_actor"]
-                    opt_actor.zero_grad()
-                    loss_actor.backward()
-                    torch.nn.utils.clip_grad_norm_(opt_actor.param_groups[0]["params"], self.config["training"]["max_grad_norm"])
-                    opt_actor.step()
-
-                    # --- critic step ---
-                    opt_critic = self.optimisers[group]["loss_value"]
-                    opt_critic.zero_grad()
-                    loss_value.backward()
-                    torch.nn.utils.clip_grad_norm_(opt_critic.param_groups[0]["params"], self.config["training"]["max_grad_norm"])
-                    opt_critic.step()
-
-                    # --- polyak update targets ONCE ---
-                    tau = float(self.config["training"]["polyak_tau"])
-                    self.polyak_update_(self.policies[group], self.target_policies[group], tau)
-                    self.polyak_update_(self.critics[group],  self.target_critics[group],  tau)
-
                     # loss_vals = self.losses[group](minibatch)
                     # for loss_name in ["loss_actor", "loss_value"]:
                         
@@ -482,69 +447,4 @@ class IbmarlExperiment(BaseMARLExperiment):
         return a_next_star
     
 
-    def ibmarl_value_loss(self, group:str, mb: TensorDictBase) -> torch.Tensor:
-        '''
-        returns loss using bootstrap proposal
-        '''
-
-        obs     = mb[(group, "observation")]
-        act     = mb[(group, "action")]
-        rew     = mb[("next", group, "reward")]
-        done    = mb[("next", group, "done")]
-        next_obs= mb[("next", group, "observation")]
-
-        gamma = float(self.config["training"]["gamma"])
-
-        #current Q
-        td_cur = TensorDict({(group, "observation"): obs, (group, "action"): act}, batch_size=[obs.shape[0]], device=obs.device)
-        q = self.critics[group](td_cur)[(group, "state_action_value")]
-
-        #target calculation
-        with torch.no_grad():
-            a_next_star = self.best_next_act_comb(group, next_obs)
-            td_n = TensorDict({(group, "observation"): next_obs, (group, "action"): a_next_star},
-                                batch_size=[next_obs.shape[0]], device=next_obs.device)
-            q_next = self.target_critics[group](td_n)[(group, "state_action_value")]
-
-            y = rew + gamma * (1.0-done.float()) * q_next
-        
-
-        
-
-        #ensure dimensions align:
-        if q.dim() == 2 and y.dim() == 3:
-            y_red = y.sum(dim=1)
-            loss = F.mse_loss(q, y_red)
-        else:
-            loss = F.mse_loss(q,y)
-        
-        return loss
-    
-    def ibmarl_actor_loss(self, group: str, mb: TensorDictBase) -> torch.Tensor:
-        """
-        MADDPG-style actor loss:
-        L_actor = -E[ Q(obs, pi(obs)) ]
-
-        mb[(group,"observation")] is [B, N, obs_dim]
-        """
-        obs = mb[(group, "observation")]  # [B,N,obs_dim]
-        B = obs.shape[0]
-
-        # Compute actions from current policy (NO exploration noise in the loss)
-        td_pi = TensorDict({(group, "observation"): obs}, batch_size=[B], device=obs.device)
-        td_pi = self.policies[group](td_pi)
-        a_pi = td_pi[(group, "action")]  # [B,N,act_dim]
-
-        # Evaluate critic on (obs, a_pi)
-        td_q = TensorDict({(group, "observation"): obs, (group, "action"): a_pi}, batch_size=[B], device=obs.device)
-        q = self.critics[group](td_q)[(group, "state_action_value")]  # [B,N,1] or [B,1]
-
-        # Reduce to a scalar per batch element
-        if q.dim() == 3:
-            q_tot = q.sum(dim=1).squeeze(-1)   # [B]
-        elif q.dim() == 2:
-            q_tot = q.squeeze(-1)              # [B]
-        else:
-            raise RuntimeError(f"Unexpected critic output shape in actor loss: {list(q.shape)}")
-
-        return -q_tot.mean()
+   
