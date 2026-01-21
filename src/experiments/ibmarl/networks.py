@@ -62,6 +62,8 @@ class R2bcPolicy():
                 raise RuntimeError(f"Unexpected IL output shape {a.shape}, expected {(B, N, act_dim)}")
 
             print(f"[IL OK] group={group}: obs {list(obs.shape)} -> act {list(a.shape)}")
+    
+   
 
 
 def build_rl_policies(cfg, env, device):
@@ -121,7 +123,7 @@ def build_rl_policies(cfg, env, device):
                 spec = policies[group].spec,
                 annealing_num_steps= cfg.get('total_frames') // 2, # type: ignore
                 action_key= (group, "action"),
-                sigma_init = 0.9,
+                sigma_init = 0.1,
                 sigma_end = 0.1,
             )
             

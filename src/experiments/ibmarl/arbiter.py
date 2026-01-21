@@ -2,10 +2,25 @@
 class used to find the best action combination given an IL policy and Critic
 '''
 import torch
+import itertools
+from tensordict import TensorDict
 
 class ActionArbiter:
-    def __init__(self, il_policy, rl_policy, critics, env, device):
-        pass
+    def __init__(
+            self, 
+            il_policy, 
+            rl_policy, target_rl_policy, 
+            critics, target_critics, 
+            env, device):
+        
+        self.il_policy = il_policy
+        self.rl_policy = rl_policy
+        self.target_rl_policies = target_rl_policy
+        self.critics = critics
+        self.target_critics = target_critics
+        self.env = env
+        self.device = device
+        
 
 
     def best_act_comb(self, group, obs, a_rl) -> torch.Tensor:
@@ -28,8 +43,11 @@ class ActionArbiter:
         if obs.shape[:2] != a_rl.shape[:2]:
             raise RuntimeError(f"obs and a_rl batch/agent dims mismatch: obs {list(obs.shape)} vs a_rl {list(a_rl.shape)}")
         
+        #return a_rl #no IL Proposal
+
         B, N, _ =       obs.shape
         _, _, act_dim = a_rl.shape
+
 
         #compute il action candidates
         a_il = self.il_policy.get_action(group, obs)
@@ -63,7 +81,7 @@ class ActionArbiter:
             device = obs.device,
         )
 
-        q = self.critics[group](td)[(group, "state_action_value")]
+        q = self.target_critics[group](td)[(group, "state_action_value")]
 
         #reduce q to value per permutation and environemt (k,b)
         # if value assigned per agent would be: [K,B,N,1]
@@ -79,11 +97,67 @@ class ActionArbiter:
 
         a_exec = joint[best_k, torch.arange(B, device=obs.device)]
 
-        a_exec = a_rl
+        return a_exec
+
+    def best_act_strict(self, group: str, obs: torch.Tensor, a_rl: torch.Tensor) -> torch.Tensor:
+        """
+        Choose between the all-IL joint action and the all-RL joint action
+        by scoring both with the critic and taking the higher-value option.
+
+        Inputs:
+            obs:  [B, N, obs_dim]
+            a_rl: [B, N, act_dim]
+
+        Output:
+            a_exec: [B, N, act_dim]
+        """
+        # dimension verifications
+        if obs.dim() != 3:
+            raise RuntimeError(f"obs must be [B,N,obs_dim], got {list(obs.shape)}")
+        if a_rl.dim() != 3:
+            raise RuntimeError(f"a_rl must be [B,N,act_dim], got {list(a_rl.shape)}")
+        if obs.shape[:2] != a_rl.shape[:2]:
+            raise RuntimeError(
+                f"obs and a_rl batch/agent dims mismatch: obs {list(obs.shape)} vs a_rl {list(a_rl.shape)}"
+            )
+
+        B, N, _ = obs.shape
+
+        # IL candidate (must match RL shape)
+        a_il = self.il_policy.get_action(group, obs)
+        if a_il.shape != a_rl.shape:
+            raise RuntimeError(f"a_il shape {list(a_il.shape)} != a_rl shape {list(a_rl.shape)}")
+
+        # Two candidates: k=0 -> all IL, k=1 -> all RL
+        joint = torch.stack([a_il, a_rl], dim=0)  # [2, B, N, act_dim]
+
+        # Score both candidates with critic in one forward pass
+        td = TensorDict(
+            {
+                (group, "observation"): obs.unsqueeze(0).expand(2, B, *obs.shape[1:]),  # [2,B,N,obs_dim]
+                (group, "action"): joint,                                             # [2,B,N,act_dim]
+            },
+            batch_size=[2, B],
+            device=obs.device,
+        )
+
+        q = self.target_critics[group](td)[(group, "state_action_value")]
+
+        # Reduce to [2, B] so we can argmax over the 2 options
+        if q.dim() == 4:          # [2,B,N,1]
+            q_tot = q.sum(dim=2).squeeze(-1)  # [2,B]
+        elif q.dim() == 3:        # [2,B,1]
+            q_tot = q.squeeze(-1)            # [2,B]
+        else:
+            raise RuntimeError(f"unexpected critic output shape: {list(q.shape)}")
+
+        best_k = torch.argmax(q_tot, dim=0)  # [B], values in {0,1}
+
+        a_exec = joint[best_k, torch.arange(B, device=obs.device)]  # [B,N,act_dim]
         return a_exec
 
 
-    def best_next_act_comb(self, group, next_obs, next_a_rl=None):
+    def best_next_act_comb(self, group, next_obs):
         '''
         Used for bootstrap proposal
         '''
@@ -94,10 +168,13 @@ class ActionArbiter:
         #IL candidate
         a_il = self.il_policy.get_action(group, next_obs)
 
+
         #target RL-candidate
         td_pi = TensorDict({(group, "observation"): next_obs}, batch_size=[B], device = next_obs.device)
-        td_pi = self.target_policies[group](td_pi)
+        td_pi = self.target_rl_policies[group](td_pi)
         a_rl = td_pi[(group, "action")]
+
+        #return a_rl #no-bootstrapping
 
         #build all combinations
         cand = torch.stack([a_il, a_rl], dim=0)
@@ -131,5 +208,6 @@ class ActionArbiter:
         
         best_k = torch.argmax(q_tot, dim = 0)
         a_next_star = joint[best_k, torch.arange(B, device = next_obs.device)]
+
         return a_next_star
     

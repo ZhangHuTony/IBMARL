@@ -9,20 +9,23 @@ from tensordict import TensorDict, TensorDictBase
 
 
 class GroupTrainer:
-    def __init__(self, cfg, policies, critics, target_policies, target_critics, env):
+    def __init__(self, cfg, policies, critics, target_policies, target_critics, action_arbiter, env):
 
         #parameters
         self.lr = float(cfg["training"]["lr"])
         self.tau = float(cfg["training"]["polyak_tau"])
         self.max_grad_norm = float(cfg["training"]["max_grad_norm"])
+        self.gamma =  float(cfg["training"]["gamma"])
+
 
         self.env = env
+        self.action_arbiter = action_arbiter
 
 
         #networks
-        self.policies = policies
+        self.rl_policies = policies
         self.critics = critics
-        self.target_policies = target_policies
+        self.target_rl_policies = target_policies
         self.target_critics = target_critics
 
 
@@ -66,7 +69,7 @@ class GroupTrainer:
         optimisers = {
             group: {
                 "loss_actor": torch.optim.Adam(
-                    self.policies[group].parameters(),
+                    self.rl_policies[group].parameters(),
                     lr=self.lr,
                 ),
                 "loss_value": torch.optim.Adam(
@@ -92,7 +95,6 @@ class GroupTrainer:
         done    = mb[("next", group, "done")]
         next_obs= mb[("next", group, "observation")]
 
-        gamma = float(self.config["training"]["gamma"])
 
         #current Q
         td_cur = TensorDict({(group, "observation"): obs, (group, "action"): act}, batch_size=[obs.shape[0]], device=obs.device)
@@ -101,13 +103,13 @@ class GroupTrainer:
         #target calculation
         with torch.no_grad():
             #--------BOOTSTRAPPING PART------------------#
-            a_next_star = self.best_next_act_comb(group, next_obs)
+            a_next_star = self.action_arbiter.best_next_act_comb(group, next_obs)
             #-------------------------------------------------#
             td_n = TensorDict({(group, "observation"): next_obs, (group, "action"): a_next_star},
                                 batch_size=[next_obs.shape[0]], device=next_obs.device)
             q_next = self.target_critics[group](td_n)[(group, "state_action_value")]
 
-            y = rew + gamma * (1.0-done.float()) * q_next
+            y = rew + self.gamma * (1.0-done.float()) * q_next
         
 
         
@@ -134,7 +136,7 @@ class GroupTrainer:
 
         # Compute actions from current policy (NO exploration noise in the loss)
         td_pi = TensorDict({(group, "observation"): obs}, batch_size=[B], device=obs.device)
-        td_pi = self.policies[group](td_pi)
+        td_pi = self.rl_policies[group](td_pi)
         a_pi = td_pi[(group, "action")]  # [B,N,act_dim]
 
         # Evaluate critic on (obs, a_pi)

@@ -3,10 +3,10 @@ import matplotlib.pyplot as plt
 
 # Paths to your metric files
 files = [
-    ("/home/tony-zhang/Research/IBMARL/results/maddpg_navigation_2026-01-16_13-37-17/data/metrics.csv", "maddpg"),
-    ("results/ibmarl_navigation_2026-01-16_13-13-51/data/metrics.csv", "ok IL"),
-    ("results/ibmarl_navigation_2026-01-16_12-59-55/data/metrics.csv", "bad IL"),
-    ("results/ibmarl_navigation_2026-01-16_12-46-53/data/metrics.csv", "terrible IL"),
+    ("results/maddpg_navigation_2026-01-16_13-37-17/data/metrics.csv", "maddpg"),
+    ("results/ibmarl_navigation_2026-01-20_19-34-52/data/metrics.csv", "IBMARL (no actor or bootstrap)"),
+    ("results/ibmarl_navigation_2026-01-20_19-23-28/data/metrics.csv", "IBMARL (only bootstrap)"),
+    ("results/ibmarl_navigation_2026-01-20_21-35-41/data/metrics.csv", "IBMARL (-2 reward)")
 ]
 
 plt.figure()

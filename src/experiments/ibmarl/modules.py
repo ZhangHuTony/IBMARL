@@ -13,10 +13,11 @@ class OverWriteActionWithBestComb(torch.nn.Module):
     @torch.no_grad()
     def forward(self, td):
         g = self.group
-        obs = td[(g,"observation")]
+        obs = td[(g,"observation")] 
         a_rl = td[(g, "action")]
 
-        a_exec = self.parent.best_act_comb(g, obs, a_rl)
+        a_exec = self.parent.action_arbiter.best_act_comb(g, obs, a_rl)
+        #a_exec = self.parent.action_arbiter.best_act_strict(g, obs, a_rl)
 
         td[(g, "action")] = a_exec
         return td
