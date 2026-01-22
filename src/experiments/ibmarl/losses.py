@@ -103,7 +103,7 @@ class GroupTrainer:
         #target calculation
         with torch.no_grad():
             #--------BOOTSTRAPPING PART------------------#
-            a_next_star = self.action_arbiter.best_next_act_comb(group, next_obs)
+            a_next_star = self.action_arbiter.bootstrap_proposal(group, next_obs)
             #-------------------------------------------------#
             td_n = TensorDict({(group, "observation"): next_obs, (group, "action"): a_next_star},
                                 batch_size=[next_obs.shape[0]], device=next_obs.device)
@@ -123,7 +123,6 @@ class GroupTrainer:
         
         return loss
     
-    #TODO
     def _ibmarl_actor_loss(self, group: str, mb: TensorDictBase) -> torch.Tensor:
         """
         MADDPG-style actor loss:

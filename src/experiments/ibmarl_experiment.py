@@ -1,42 +1,20 @@
 
 from src.experiments.base_marl_experiment import BaseMARLExperiment
-from pathlib import Path
-
-from src.r2bc.mabc import DecentralizedMiniBC
 
 
-from tensordict import TensorDictBase
-import torch
+
+
 import copy
-import itertools
 
-import torch.nn.functional as F
 
 from tqdm import tqdm
 
-
-from torchrl.modules import (
-    MultiAgentMLP,
-    ProbabilisticActor,
-    TanhDelta,
-    AdditiveGaussianModule,
-)
-
-from torchrl.collectors import SyncDataCollector
-from torchrl.data import LazyMemmapStorage, RandomSampler, ReplayBuffer
-from torchrl.objectives import DDPGLoss, ValueEstimators, SoftUpdate
-
-from tensordict.nn import TensorDictModule, TensorDictSequential
-from tensordict import TensorDict
 from pathlib import Path
 
 
-from torchrl.envs import TransformedEnv, ExplorationType, set_exploration_type
-from torchrl.record import CSVLogger, PixelRenderTransform, VideoRecorder
 
 
 from src.experiments.ibmarl.networks import R2bcPolicy, build_rl_policies, build_critics, build_targets
-from src.experiments.ibmarl.modules import OverWriteActionWithBestComb
 from src.experiments.ibmarl.losses import GroupTrainer
 from src.experiments.ibmarl.arbiter import ActionArbiter
 from src.experiments.ibmarl.data import build_data_collector, build_replay_buffer, process_batch
@@ -60,7 +38,7 @@ class IbmarlExperiment(BaseMARLExperiment):
 
         self.replay_buffers = build_replay_buffer(config, self.env, self.device)
 
-        self.action_arbiter = ActionArbiter(self.il_policies, self.rl_policies, self.target_policies, self.critics, self.target_critics, self.env, self.device)
+        self.action_arbiter = ActionArbiter(config, self.il_policies, self.rl_policies, self.target_policies, self.critics, self.target_critics, self.env, self.device)
 
         self.agents_exploration_policy, self.collector = build_data_collector(config, self, self.rl_noise_policies, self.env, self.device)
 
@@ -81,11 +59,26 @@ class IbmarlExperiment(BaseMARLExperiment):
         )
 
         episode_reward_mean_map = {group: [] for group in self.env.group_map.keys()}
+        rl_action_fraction_map = {group: [] for group in self.env.group_map.keys()}
         train_group_map = copy.deepcopy(self.env.group_map)
 
         for iteration, batch in enumerate(self.collector):
+
+            for group in self.env.group_map.keys():
+                # Retrieve the choices saved in modules.py
+                choices = batch.get((group, "arbiter_choice")) 
+                
+                if choices is not None:
+                    # In strict mode: 1=RL, 0=IL. Mean is exactly the fraction.
+                    frac = choices.float().mean().item()
+                    rl_action_fraction_map[group].append(frac)
+                    print(f"Group {group} RL Fraction: {frac:.4f}")
+                else:
+                    print(f"Warning: No arbiter choice found for {group}")
+                    
             current_frames = batch.numel()
             batch = process_batch(self.env, batch)
+
 
             for group in train_group_map.keys():
                 group_batch = batch.exclude(
@@ -101,6 +94,8 @@ class IbmarlExperiment(BaseMARLExperiment):
                 ) 
 
                 self.replay_buffers[group].extend(group_batch)
+
+
 
                 for _ in range(self.config.get('training').get('n_optimiser_steps')):
                     minibatch = self.replay_buffers[group].sample()
@@ -142,6 +137,7 @@ class IbmarlExperiment(BaseMARLExperiment):
 
         self.results["group_map_keys"] = self.env.group_map.keys()
         self.results["episode_reward_mean_map"] = episode_reward_mean_map
+        self.results["rl_action_fraction"] = rl_action_fraction_map
 
     
     def save_checkpoint(self):

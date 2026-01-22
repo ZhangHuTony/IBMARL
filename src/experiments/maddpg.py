@@ -1,10 +1,12 @@
 
 from tensordict import TensorDictBase
 import torch
+import torch.nn as nn
 import copy
 from tqdm import tqdm
 
 from src.experiments.base_marl_experiment import BaseMARLExperiment
+from src.experiments.ibmarl.modules import IndependentAgentPolicy
 
 from torchrl.modules import (
     MultiAgentMLP,
@@ -30,7 +32,7 @@ class MaddpgExperiment(BaseMARLExperiment):
     def __init__(self, config):
         super().__init__(config)
 
-        self.policies, self.exploration_policies = self._setup_policy()
+        self.policies, self.exploration_policies = self._setup_policy(self.config, self.env, self.device)
 
         self.critics = self._setup_critic()
 
@@ -43,26 +45,38 @@ class MaddpgExperiment(BaseMARLExperiment):
 
 
 
-    def _setup_policy(self):
+
+    def _setup_policy(self, cfg, env, device):
+        print("Setting up IBMARL RL Policies (Custom Architecture)...")
+
         policy_modules = {}
-        print("Setting up MADDPG policy networks...")
 
-        centralized = False #MADDPG uses decentralized policies (ADD THIS TO CONFIG LATER?)
-        share_params = False #each agent has its own policy (ADD THIS TO CONFIG LATER?)
+        for group, agents in env.group_map.items():
+            obs_dim = env.observation_spec[group, "observation"].shape[-1]
+            act_dim = env.full_action_spec[group, "action"].shape[-1]
+            n_agents = len(agents)
 
-        # define neural network
-        for group, agents in self.env.group_map.items():
-            policy_net = MultiAgentMLP(
-                n_agent_inputs= self.env.observation_spec[group, "observation"].shape[-1],
-                n_agent_outputs= self.env.full_action_spec[group, "action"].shape[-1],
-                n_agents = len(agents),
-                centralized=centralized,
-                share_params= share_params,
-                device = self.device,
-                depth = 2,
-                num_cells = 256,
-                activation_class= torch.nn.Tanh
-            )
+            # Use the custom class that supports LayerNorm + Dropout + Independent Params
+            policy_net = IndependentAgentPolicy(
+                n_agents=n_agents,
+                input_dim=obs_dim,
+                output_dim=act_dim,
+                hidden_dim=256,   # Adjusted for config size
+                depth=3,          # 
+                dropout=0.5       # CRITICAL: Paper uses 0.5 Actor Dropout [cite: 172]
+            ).to(device)
+
+            # policy_net = MultiAgentMLP(
+            #     n_agent_inputs= env.observation_spec[group, "observation"].shape[-1],
+            #     n_agent_outputs= env.full_action_spec[group, "action"].shape[-1],
+            #     n_agents = len(agents),
+            #     centralized=False,
+            #     share_params= False,
+            #     device = device,
+            #     depth = 2,
+            #     num_cells = 256,
+            #     activation_class= torch.nn.Tanh
+            # )
 
             policy_module = TensorDictModule(
                 policy_net,
@@ -71,17 +85,17 @@ class MaddpgExperiment(BaseMARLExperiment):
             )
 
             policy_modules[group] = policy_module
-        
-        #wrap in probability distribution
+            
+        # Wrap in probability distribution (TanhDelta handles the final Tanh activation)
         policies = {}
 
-        for group, _agents in self.env.group_map.items():
-            low = self.env.full_action_spec_unbatched[group, "action"].space.low.to(self.device)
-            high = self.env.full_action_spec_unbatched[group, "action"].space.high.to(self.device)
+        for group, _agents in env.group_map.items():
+            low = env.full_action_spec_unbatched[group, "action"].space.low.to(device)
+            high = env.full_action_spec_unbatched[group, "action"].space.high.to(device)
 
             policy = ProbabilisticActor(
                 module=policy_modules[group],
-                spec=self.env.full_action_spec[group, "action"],
+                spec=env.full_action_spec[group, "action"],
                 in_keys=[(group, "param")],
                 out_keys=[(group, "action")],
                 distribution_class=TanhDelta,
@@ -91,25 +105,23 @@ class MaddpgExperiment(BaseMARLExperiment):
 
             policies[group] = policy
         
-        #exploration policies
+        # Exploration policies (Annealing Gaussian noise)
         exploration_policies = {}
-        for group, _agents in self.env.group_map.items():
-            print(self.config.get('total_frames') // 2) # type: ignore
+        for group, _agents in env.group_map.items():
             exploration_policy = TensorDictSequential(
                 policies[group],
                 AdditiveGaussianModule(
                     spec = policies[group].spec,
-                    annealing_num_steps= self.config.get('total_frames') // 2, # type: ignore
+                    annealing_num_steps= cfg.get('total_frames') // 2,
                     action_key= (group, "action"),
-                    sigma_init = 0.9,
+                    sigma_init = 0.1,
                     sigma_end = 0.1,
                 )
-                
             )
             exploration_policies[group] = exploration_policy
         
         return policies, exploration_policies
-    
+        
     def _setup_critic(self):
         critics = {}
 

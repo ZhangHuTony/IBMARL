@@ -3,10 +3,11 @@ import matplotlib.pyplot as plt
 
 # Paths to your metric files
 files = [
-    ("results/maddpg_navigation_2026-01-16_13-37-17/data/metrics.csv", "maddpg"),
-    ("results/ibmarl_navigation_2026-01-20_19-34-52/data/metrics.csv", "IBMARL (no actor or bootstrap)"),
-    ("results/ibmarl_navigation_2026-01-20_19-23-28/data/metrics.csv", "IBMARL (only bootstrap)"),
-    ("results/ibmarl_navigation_2026-01-20_21-35-41/data/metrics.csv", "IBMARL (-2 reward)")
+    ("results/maddpg/data/metrics.csv", "maddpg"),
+   # ("results/maddpg_dropout/data/metrics.csv", "maddpg (dropout)"),
+    ("results/ibmarl_navigation_2026-01-21_21-49-41/data/metrics.csv", "ibmarl (greedy)"),
+    ("results/ibmarl_navigation_2026-01-21_22-17-29/data/metrics.csv", "ibmarl (soft 3)"),
+    ("results/ibmarl_navigation_2026-01-21_22-34-12/data/metrics.csv", "ibmarl (soft 1)")
 ]
 
 plt.figure()
@@ -30,17 +31,12 @@ plt.tight_layout()
 plt.show()
 
 
-file = "results/ibmarl_navigation_2026-01-16_14-49-32/data/metrics.csv"
+file = "results/ibmarl_navigation_2026-01-21_22-17-29/data/metrics.csv"
 
 df = pd.read_csv(file)
 
 headers = [
-    "episode_reward_mean",
-    "il_action_frac",
-    "q_exec_mean",
-    "q_rl_policy_mean",
-    "q_il_mean",
-    "q_rl_minus_il_mean"
+    "rl_action_fraction",
 ]
 
 plt.figure()

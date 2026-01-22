@@ -14,7 +14,11 @@ import csv
 
 
 class BaseMARLExperiment:
-    RESULT_KEYS = ("group_map_keys", "episode_reward_mean_map")
+    RESULT_KEYS = (
+        "group_map_keys", 
+        "episode_reward_mean_map", 
+       "rl_action_fraction"
+        )
 
     def __init__(self, config):
 
@@ -71,6 +75,7 @@ class BaseMARLExperiment:
         metrics_path = data_dir / "metrics.csv"
 
         mean_map = self.results["episode_reward_mean_map"]
+        fraction_map = self.results.get("rl_action_fraction", {})
 
         # Defensive checks
         if not isinstance(mean_map, dict):
@@ -88,20 +93,25 @@ class BaseMARLExperiment:
                 "iteration",
                 "group",
                 "episode_reward_mean",
+                "rl_action_fraction"
             ])
 
             # Rows
             for group, rewards in mean_map.items():
+                fractions = fraction_map.get(group, [0.0] * len(rewards))
                 if not isinstance(rewards, (list, tuple)):
                     raise TypeError(
                         f"Rewards for group '{group}' must be a list or tuple."
                     )
 
-                for iteration, reward in enumerate(rewards):
+                for iteration, (reward,fraction) in enumerate(zip(rewards,fractions)):
+                #for iteration, (reward) in enumerate(rewards):
+
                     writer.writerow([
                         iteration,
                         group,
                         float(reward),
+                        float(fraction)
                     ])
 
         print(f"Saved metrics to: {metrics_path.resolve()}")

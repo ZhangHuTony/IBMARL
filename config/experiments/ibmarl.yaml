@@ -11,3 +11,5 @@ r2bc_checkpoint_path : "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_d
 #r2bc_checkpoint_path : "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260112_204052/policy_checkpoint.pth"  #240 demonstrations
 
 # r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260116_092701/policy_checkpoint.pth"
+
+strict : True #choose best combinatoion of policies or better policy actions
