@@ -105,13 +105,13 @@ class BaseMARLExperiment:
                     )
 
                 for iteration, (reward,fraction) in enumerate(zip(rewards,fractions)):
-                #for iteration, (reward) in enumerate(rewards):
+             #   for iteration, (reward) in enumerate(rewards):
 
                     writer.writerow([
                         iteration,
                         group,
                         float(reward),
-                        float(fraction)
+                       float(fraction)
                     ])
 
         print(f"Saved metrics to: {metrics_path.resolve()}")

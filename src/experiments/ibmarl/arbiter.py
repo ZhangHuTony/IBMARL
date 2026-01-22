@@ -184,12 +184,12 @@ class ActionArbiter:
         else:
             raise RuntimeError(f"unexpected critic output shape: {list(q.shape)}")
 
-        ##greedy###
-        #best_k = torch.argmax(q_tot, dim=0)  # [B], values in {0,1}
-        ###########
+        # ##greedy###
+        # best_k = torch.argmax(q_tot, dim=0)  # [B], values in {0,1}
+        # ###########
 
         ##soft#####
-        temperature = 1.0
+        temperature = 3.0
         # 2. Transpose q_tot from [2, B] to [B, 2] for Categorical
         logits = q_tot.permute(1, 0) / temperature
 
@@ -199,7 +199,7 @@ class ActionArbiter:
         
         best_k = dist.sample() # [B]
 
-        ##############
+        # ##############
 
         if group in self.metrics:
             # best_k is 1 if RL was chosen, 0 if IL. Sum gives total RL choices.
@@ -249,12 +249,12 @@ class ActionArbiter:
         else:
             raise RuntimeError(f"Unexpected target critic output shape: {list(q.shape)}")
         
-        ####greedy####
-        #best_k = torch.argmax(q_tot, dim = 0)
-        #########
+        # ####greedy####
+        # best_k = torch.argmax(q_tot, dim = 0)
+        # #########
         
         ##soft#####
-        temperature = 1.0
+        temperature = 3.0
         # 2. Transpose q_tot from [2, B] to [B, 2] for Categorical
         logits = q_tot.permute(1, 0) / temperature
 

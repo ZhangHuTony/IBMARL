@@ -113,10 +113,9 @@ def run_experiment(cfg):
     experiment = ExperimentClass(cfg)
     experiment.train()
 
-    #if cfg.get("render"):
-#        experiment.render()
-
     experiment.save_results()
+    if cfg.get("render"):
+        experiment.render_policy()
 
 
 # WILL REMOVE AND ADD TO AN ANALYSIS SCRIPT

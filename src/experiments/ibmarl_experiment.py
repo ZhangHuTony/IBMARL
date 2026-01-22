@@ -5,12 +5,16 @@ from src.experiments.base_marl_experiment import BaseMARLExperiment
 
 
 import copy
+import torch
 
 
 from tqdm import tqdm
 
 from pathlib import Path
+from torchrl.record import CSVLogger, PixelRenderTransform, VideoRecorder
 
+from tensordict.nn import TensorDictSequential
+from torchrl.envs import TransformedEnv, ExplorationType, set_exploration_type
 
 
 
@@ -24,7 +28,7 @@ class IbmarlExperiment(BaseMARLExperiment):
     def __init__(self, config):
         super().__init__(config)
 
-
+        self.render_path = config['videos_dir']
 
         #setup networks
         bc_path = Path(config["r2bc_checkpoint_path"])
@@ -144,7 +148,46 @@ class IbmarlExperiment(BaseMARLExperiment):
         raise NotImplementedError
     
     def render_policy(self):
-        raise NotImplementedError
+        
+        results_dir = self.render_path
+
+
+        video_logger = CSVLogger(
+            exp_name="vmas_logs",
+            log_dir=str(results_dir),
+            video_format="mp4",
+        )
+
+        print("Creating rendering env")
+        env_with_render = TransformedEnv(self.env.base_env, self.env.transform.clone())
+
+        env_with_render = env_with_render.append_transform(
+            PixelRenderTransform(
+                out_keys=["pixels"],
+                preproc=lambda x: x.copy(),  # fix negative stride issue
+                as_non_tensor=True,
+                mode="rgb_array",
+            )
+        )
+
+        env_with_render = env_with_render.append_transform(
+            VideoRecorder(logger=video_logger, tag="vmas_rendered")
+        )
+
+        # deterministic policy (no exploration noise)
+        render_policy = TensorDictSequential(*self.rl_policies.values())
+        render_policy.eval()
+
+        with torch.no_grad():
+            with set_exploration_type(ExplorationType.MODE):
+                print("Rendering rollout...")
+                env_with_render.rollout(100, policy=render_policy)
+
+        print("Saving video...")
+        env_with_render.transform.dump()
+
+        print("Saved! Video location:")
+        video_logger.print_log_dir()
     
  
 

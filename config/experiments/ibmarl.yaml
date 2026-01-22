@@ -4,12 +4,12 @@
 extends: "../base.yaml"
 
 #IL Policy
-r2bc_checkpoint_path : "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260115_201600/policy_checkpoint.pth" #24 demonstrations (average around -2)
+#r2bc_checkpoint_path : "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260115_201600/policy_checkpoint.pth" #24 demonstrations (average around -2)
 
-#r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260115_211757/policy_checkpoint.pth" #36 demonstrations (average around 2)
+r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260115_211757/policy_checkpoint.pth" #36 demonstrations (average around 2)
 
 #r2bc_checkpoint_path : "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260112_204052/policy_checkpoint.pth"  #240 demonstrations
 
-# r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260116_092701/policy_checkpoint.pth"
+#r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260116_092701/policy_checkpoint.pth" #54 demonstrations
 
 strict : True #choose best combinatoion of policies or better policy actions
