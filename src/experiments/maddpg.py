@@ -47,7 +47,7 @@ class MaddpgExperiment(BaseMARLExperiment):
 
 
     def _setup_policy(self, cfg, env, device):
-        print("Setting up IBMARL RL Policies (Custom Architecture)...")
+        print("Setting up Policies...")
 
         policy_modules = {}
 
@@ -56,27 +56,27 @@ class MaddpgExperiment(BaseMARLExperiment):
             act_dim = env.full_action_spec[group, "action"].shape[-1]
             n_agents = len(agents)
 
-            # Use the custom class that supports LayerNorm + Dropout + Independent Params
-            policy_net = IndependentAgentPolicy(
-                n_agents=n_agents,
-                input_dim=obs_dim,
-                output_dim=act_dim,
-                hidden_dim=256,   # Adjusted for config size
-                depth=3,          # 
-                dropout=0.5       # CRITICAL: Paper uses 0.5 Actor Dropout [cite: 172]
-            ).to(device)
+            # # Use the custom class that supports LayerNorm + Dropout + Independent Params
+            # policy_net = IndependentAgentPolicy(
+            #     n_agents=n_agents,
+            #     input_dim=obs_dim,
+            #     output_dim=act_dim,
+            #     hidden_dim=256,   # Adjusted for config size
+            #     depth=3,          # 
+            #     dropout=0.5       # CRITICAL: Paper uses 0.5 Actor Dropout [cite: 172]
+            # ).to(device)
 
-            # policy_net = MultiAgentMLP(
-            #     n_agent_inputs= env.observation_spec[group, "observation"].shape[-1],
-            #     n_agent_outputs= env.full_action_spec[group, "action"].shape[-1],
-            #     n_agents = len(agents),
-            #     centralized=False,
-            #     share_params= False,
-            #     device = device,
-            #     depth = 2,
-            #     num_cells = 256,
-            #     activation_class= torch.nn.Tanh
-            # )
+            policy_net = MultiAgentMLP(
+                n_agent_inputs= env.observation_spec[group, "observation"].shape[-1],
+                n_agent_outputs= env.full_action_spec[group, "action"].shape[-1],
+                n_agents = len(agents),
+                centralized=False,
+                share_params= False,
+                device = device,
+                depth = 2,
+                num_cells = 256,
+                activation_class= torch.nn.Tanh
+            )
 
             policy_module = TensorDictModule(
                 policy_net,
@@ -351,8 +351,7 @@ class MaddpgExperiment(BaseMARLExperiment):
 
     def render_policy(self):
 
-        results_dir = Path("results")
-        results_dir.mkdir(exist_ok=True)
+        results_dir = self.render_path
 
 
         video_logger = CSVLogger(
@@ -384,10 +383,12 @@ class MaddpgExperiment(BaseMARLExperiment):
         with torch.no_grad():
             with set_exploration_type(ExplorationType.MODE):
                 print("Rendering rollout...")
-                env_with_render.rollout(200, policy=render_policy)
+                env_with_render.rollout(100, policy=render_policy)
 
         print("Saving video...")
         env_with_render.transform.dump()
 
         print("Saved! Video location:")
         video_logger.print_log_dir()
+
+        

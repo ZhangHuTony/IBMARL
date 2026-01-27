@@ -21,6 +21,7 @@ class OverWriteActionWithBestComb(torch.nn.Module):
 
         td[(g, "action")] = a_exec
 
+
         B, N, _ = obs.shape
         arbiter_choice_expanded = arbiter_choice.unsqueeze(-1).expand(B, N)
 

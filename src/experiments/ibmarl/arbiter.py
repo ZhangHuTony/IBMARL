@@ -15,6 +15,8 @@ class ActionArbiter:
             env, device):
         
         self.strict = config.get("strict")
+        self.soft = config.get("soft")
+        self.temperature = config.get("temperature")
 
         self.il_policy = il_policy
         self.rl_policy = rl_policy
@@ -67,6 +69,7 @@ class ActionArbiter:
         Output:
             a_exec: [B, N, act_dim] 
         '''
+        raise NotImplementedError
 
         # dimension verifications
         if obs.dim() != 3:
@@ -184,22 +187,20 @@ class ActionArbiter:
         else:
             raise RuntimeError(f"unexpected critic output shape: {list(q.shape)}")
 
-        # ##greedy###
-        # best_k = torch.argmax(q_tot, dim=0)  # [B], values in {0,1}
-        # ###########
 
-        ##soft#####
-        temperature = 3.0
-        # 2. Transpose q_tot from [2, B] to [B, 2] for Categorical
-        logits = q_tot.permute(1, 0) / temperature
 
-        # 3. Create distribution and sample
-        # This effectively performs softmax(logits) and samples index 0 or 1
-        dist = torch.distributions.Categorical(logits=logits)
-        
-        best_k = dist.sample() # [B]
+        if self.soft:
+      
+            logits = q_tot.permute(1, 0) / self.temperature
 
-        # ##############
+            # 3. Create distribution and sample
+            # This effectively performs softmax(logits) and samples index 0 or 1
+            dist = torch.distributions.Categorical(logits=logits)
+            
+            best_k = dist.sample() # [B]
+
+        else: 
+            best_k = torch.argmax(q_tot, dim=0)  # [B], values in {0,1}
 
         if group in self.metrics:
             # best_k is 1 if RL was chosen, 0 if IL. Sum gives total RL choices.
@@ -207,6 +208,7 @@ class ActionArbiter:
             self.metrics[group]["total_action_count"] += best_k.numel()
 
         a_exec = joint[best_k, torch.arange(B, device=obs.device)]  # [B,N,act_dim]
+
         return a_exec, best_k
     
     def _best_next_act_strict(self, group, next_obs):
@@ -215,8 +217,9 @@ class ActionArbiter:
         '''
 
         B, N, obs_dim = next_obs.shape
-        act_dim = self.env.full_action_spec[group, "action"].shape[-1]
 
+        act_dim = self.env.full_action_spec[group, "action"]
+        
         #IL candidate
         a_il = self.il_policy.get_action(group, next_obs)
 
@@ -249,23 +252,19 @@ class ActionArbiter:
         else:
             raise RuntimeError(f"Unexpected target critic output shape: {list(q.shape)}")
         
-        # ####greedy####
-        # best_k = torch.argmax(q_tot, dim = 0)
-        # #########
-        
-        ##soft#####
-        temperature = 3.0
-        # 2. Transpose q_tot from [2, B] to [B, 2] for Categorical
-        logits = q_tot.permute(1, 0) / temperature
+        if self.soft:
+      
+            logits = q_tot.permute(1, 0) / self.temperature
 
-        # 3. Create distribution and sample
-        # This effectively performs softmax(logits) and samples index 0 or 1
-        dist = torch.distributions.Categorical(logits=logits)
-        
-        best_k = dist.sample() # [B]
+            # 3. Create distribution and sample
+            # This effectively performs softmax(logits) and samples index 0 or 1
+            dist = torch.distributions.Categorical(logits=logits)
+            
+            best_k = dist.sample() # [B]
 
-        ##############
-        
+        else: 
+            best_k = torch.argmax(q_tot, dim=0)  # [B], values in {0,1}
+
         a_next_star = joint[best_k, torch.arange(B, device = next_obs.device)]
 
         return a_next_star

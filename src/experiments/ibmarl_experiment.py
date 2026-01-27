@@ -15,7 +15,7 @@ from torchrl.record import CSVLogger, PixelRenderTransform, VideoRecorder
 
 from tensordict.nn import TensorDictSequential
 from torchrl.envs import TransformedEnv, ExplorationType, set_exploration_type
-
+from tensordict import TensorDict
 
 
 from src.experiments.ibmarl.networks import R2bcPolicy, build_rl_policies, build_critics, build_targets
@@ -28,7 +28,6 @@ class IbmarlExperiment(BaseMARLExperiment):
     def __init__(self, config):
         super().__init__(config)
 
-        self.render_path = config['videos_dir']
 
         #setup networks
         bc_path = Path(config["r2bc_checkpoint_path"])
@@ -40,11 +39,13 @@ class IbmarlExperiment(BaseMARLExperiment):
 
         self.target_policies, self.target_critics = build_targets(self.rl_policies, self.critics, self.env)
 
-        self.replay_buffers = build_replay_buffer(config, self.env, self.device)
 
         self.action_arbiter = ActionArbiter(config, self.il_policies, self.rl_policies, self.target_policies, self.critics, self.target_critics, self.env, self.device)
 
         self.agents_exploration_policy, self.collector = build_data_collector(config, self, self.rl_noise_policies, self.env, self.device)
+
+        self.replay_buffers = build_replay_buffer(config, self.env, self.device)
+
 
         self.trainer = GroupTrainer(config, self.rl_policies, self.critics, self.target_policies, self.target_critics, self.action_arbiter, self.env)
 
@@ -97,7 +98,14 @@ class IbmarlExperiment(BaseMARLExperiment):
                     -1
                 ) 
 
-                self.replay_buffers[group].extend(group_batch)
+                # 1. Force unlock the internal storage of the replay buffer
+                # This is often necessary if the buffer was created before the collector
+                if hasattr(self.replay_buffers[group].storage, "_storage"):
+                    if isinstance(self.replay_buffers[group].storage._storage, TensorDict):
+                        self.replay_buffers[group].storage._storage.unlock_()
+
+                # 2. Extend with a clone to be safe
+                self.replay_buffers[group].extend(group_batch.clone())
 
 
 

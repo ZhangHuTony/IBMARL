@@ -95,7 +95,6 @@ class GroupTrainer:
         done    = mb[("next", group, "done")]
         next_obs= mb[("next", group, "observation")]
 
-
         #current Q
         td_cur = TensorDict({(group, "observation"): obs, (group, "action"): act}, batch_size=[obs.shape[0]], device=obs.device)
         q = self.critics[group](td_cur)[(group, "state_action_value")]

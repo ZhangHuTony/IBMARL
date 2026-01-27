@@ -31,6 +31,9 @@ class BaseMARLExperiment:
 
         self.results = self._initialize_results()
 
+        self.render_path = config['videos_dir']
+
+
 
 
     def _setup_device(self):
@@ -105,7 +108,7 @@ class BaseMARLExperiment:
                     )
 
                 for iteration, (reward,fraction) in enumerate(zip(rewards,fractions)):
-             #   for iteration, (reward) in enumerate(rewards):
+                #for iteration, (reward) in enumerate(rewards):
 
                     writer.writerow([
                         iteration,
