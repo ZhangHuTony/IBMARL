@@ -1,29 +1,31 @@
 import torch
 from torchrl.envs.transforms import Transform
-
+from torchrl.data import UnboundedContinuousTensorSpec, CompositeSpec
 
 class NavigationSparseReward(Transform):
     """
     Sparse reward for navigation:
     reward = 1 if agent is on goal, else 0.
 
-    Assumes the observation contains either:
-    - distance to goal at a known index, OR
-    - relative goal vector (dx, dy) at a known slice.
+    This version overrides _call directly to avoid the NotImplementedError
+    caused by the base Transform class trying to use _apply_transform.
     """
 
     def __init__(
         self,
         *,
         group: str = "agents",
-        success_threshold: float = 0.05,
+        success_threshold: float = 0.025,
         distance_index: int | None = None,
         rel_goal_slice: slice | None = None,
     ):
-        super().__init__(in_keys=[(group, "observation"), ("next", group, "reward")])
+        # We initialize the base class without in_keys/out_keys.
+        # This prevents the base class from trying to run its automated 
+        # _apply_transform logic, which is what causes the error.
+        super().__init__()
+        
         self.group = group
         self.success_threshold = success_threshold
-
         self.distance_index = distance_index
         self.rel_goal_slice = rel_goal_slice
 
@@ -40,13 +42,38 @@ class NavigationSparseReward(Transform):
         return torch.linalg.vector_norm(rel, dim=-1)
 
     def _call(self, td):
+        """
+        Manually calculate the reward and update the TensorDict.
+        This is called during the environment step.
+        """
+        # The observation we need is located in the same TensorDict 
+        # that the environment just populated during its internal _step.
         obs = td.get((self.group, "observation"))
 
         dist = self._compute_dist(obs)
+        
+        # Calculate sparse reward: 1.0 if close enough, else 0.0
         success = (dist < self.success_threshold).to(obs.dtype)
-
-        # reward shape: (..., n_agents, 1)
+        
+        # Reshape to (..., n_agents, 1) to match TorchRL reward specs
         reward = success.unsqueeze(-1)
 
-        td.set(("next", self.group, "reward"), reward)
+        # Overwrite the default reward with our sparse version
+        td.set((self.group, "reward"), reward)
+        
         return td
+
+    def transform_reward_spec(self, reward_spec):
+        """
+        Ensures check_env_specs (and the environment in general) knows 
+        that we are providing a valid reward specification.
+        """
+        if isinstance(reward_spec, CompositeSpec):
+            # We ensure the reward spec for our group matches our output
+            curr_spec = reward_spec[self.group, "reward"]
+            reward_spec[self.group, "reward"] = UnboundedContinuousTensorSpec(
+                shape=curr_spec.shape,
+                device=curr_spec.device,
+                dtype=curr_spec.dtype
+            )
+        return reward_spec
