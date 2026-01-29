@@ -129,7 +129,8 @@ class ActionArbiter:
         perm_map = torch.tensor(choices, dtype=torch.float32, device=obs.device) # [K, N]
         mask = perm_map[best_k] # [B, N]
 
-        return a_exec, mask
+
+        return a_rl, mask
 
     def _best_act_strict(self, group: str, obs: torch.Tensor, a_rl: torch.Tensor) -> torch.Tensor:
         """
