@@ -1,6 +1,14 @@
 Using https://docs.pytorch.org/rl/0.4/tutorials/multiagent_competitive_ddpg.html as a reference
 
-Trying to get the MADDPG policy to successfully train when running `python -m src.run_experiment navigation maddpg`
+
+To run maddpg:
+ `python -m src.run_experiment navigation maddpg --render`
+
+ To run ibmarl:
+  `python -m src.run_experiment navigation ibmarl --render`
+
+To change parameters of experiment look into config yaml files.
+
 
 
 File Structure:
