@@ -15,7 +15,7 @@ class NavigationSparseReward(Transform):
         self,
         *,
         group: str = "agents",
-        success_threshold: float = 0.025,
+        success_threshold,
         distance_index: int | None = None,
         rel_goal_slice: slice | None = None,
     ):
@@ -51,15 +51,42 @@ class NavigationSparseReward(Transform):
         obs = td.get((self.group, "observation"))
 
         dist = self._compute_dist(obs)
+
+        #----1.0 if close otherwise 0-------------------#
         
         # Calculate sparse reward: 1.0 if close enough, else 0.0
-        success = (dist < self.success_threshold).to(obs.dtype)
+        # success = (dist < self.success_threshold).to(obs.dtype)
         
-        # Reshape to (..., n_agents, 1) to match TorchRL reward specs
-        reward = success.unsqueeze(-1)
+        # # Reshape to (..., n_agents, 1) to match TorchRL reward specs
+        # reward = success.unsqueeze(-1)
 
-        # Overwrite the default reward with our sparse version
-        td.set((self.group, "reward"), reward)
+        # # Overwrite the default reward with our sparse version
+        # td.set((self.group, "reward"), reward)
+        #--------------------------------------------------------#
+
+        # ------------------ gt if close otherwise -1 ------------#
+        out_penalty = -0.1
+
+        gt_reward = td.get((self.group, "reward"))
+
+        # Calculate success mask: 1.0 if close enough, else 0.0
+        success_mask = (dist < self.success_threshold).to(obs.dtype)
+        
+        # Reshape to match reward specs (..., n_agents, 1)
+        success_mask = success_mask.unsqueeze(-1)
+
+        # Calculate failure mask: 0.0 if close enough, else 1.0
+        failure_mask = 1.0 - success_mask
+
+        # Apply logic:
+        # 1. Keep gt_reward where success_mask is 1
+        # 2. Add -1.0 where failure_mask is 1 (which acts as the "else" condition)
+        new_reward = (gt_reward * success_mask) + (out_penalty * failure_mask)
+
+        # Overwrite the default reward
+        td.set((self.group, "reward"), new_reward)
+
+        #----------------------------------------------------------_#
         
         return td
 

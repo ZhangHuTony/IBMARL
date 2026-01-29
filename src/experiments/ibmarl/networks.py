@@ -63,6 +63,17 @@ class R2bcPolicy():
 
             print(f"[IL OK] group={group}: obs {list(obs.shape)} -> act {list(a.shape)}")
     
+    def get_average_reward(self, num_episodes: int = 30):
+        '''
+        Get the average return of just running the il policy on the environment
+        '''
+        raise NotImplementedError
+    
+    def render(self):
+        '''
+        create a rendering of a rollout of the policy
+        '''
+        raise NotImplementedError
    
 
 

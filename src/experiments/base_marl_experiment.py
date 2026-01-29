@@ -14,11 +14,16 @@ import csv
 
 
 class BaseMARLExperiment:
-    RESULT_KEYS = (
+    MADDPG_RESULT_KEYS = (
         "group_map_keys", 
         "episode_reward_mean_map", 
-       "rl_action_fraction"
         )
+    
+    IBMARL_RESULTS_KEY = (
+         "group_map_keys", 
+        "episode_reward_mean_map", 
+       "rl_action_fraction"
+    )
 
     def __init__(self, config):
 
@@ -29,9 +34,19 @@ class BaseMARLExperiment:
         
         self.env = make_env(config, self.device)
 
-        self.results = self._initialize_results()
 
         self.render_path = config['videos_dir']
+
+        self.experiment_type = config['exp_type']
+
+        if self.experiment_type == "ibmarl":
+            self.RESULT_KEYS = self.IBMARL_RESULTS_KEY
+        elif self.experiment_type == "maddpg":
+            self.RESULT_KEYS = self.MADDPG_RESULT_KEYS
+        else:
+            RuntimeError(f"Experiment Type: {self.experiment_type} not supported")
+
+        self.results = self._initialize_results()
 
 
 
@@ -71,6 +86,8 @@ class BaseMARLExperiment:
     def save_results(self):
         '''
         Takes results and saves them to needed files
+
+        NEEDS TO BE REFACTORED BETTER THAN JUST IF STATMENTS
         '''
         self._validate_results_complete()
 
@@ -78,7 +95,9 @@ class BaseMARLExperiment:
         metrics_path = data_dir / "metrics.csv"
 
         mean_map = self.results["episode_reward_mean_map"]
-        fraction_map = self.results.get("rl_action_fraction", {})
+
+        if self.experiment_type == 'ibmarl':
+            fraction_map = self.results.get("rl_action_fraction", {})
 
         # Defensive checks
         if not isinstance(mean_map, dict):
@@ -92,30 +111,44 @@ class BaseMARLExperiment:
             writer = csv.writer(f)
 
             # Header
-            writer.writerow([
-                "iteration",
-                "group",
-                "episode_reward_mean",
-                "rl_action_fraction"
-            ])
+            if self.experiment_type == 'ibmarl':
+                writer.writerow([
+                    "iteration",
+                    "group",
+                    "episode_reward_mean",
+                    "rl_action_fraction"
+                ])
+            else: 
+                writer.writerow([
+                    "iteration",
+                    "group",
+                    "episode_reward_mean",
+                ])
 
             # Rows
             for group, rewards in mean_map.items():
-                fractions = fraction_map.get(group, [0.0] * len(rewards))
+                
                 if not isinstance(rewards, (list, tuple)):
                     raise TypeError(
                         f"Rewards for group '{group}' must be a list or tuple."
                     )
-
-                for iteration, (reward,fraction) in enumerate(zip(rewards,fractions)):
-                #for iteration, (reward) in enumerate(rewards):
-
-                    writer.writerow([
-                        iteration,
-                        group,
-                        float(reward),
-                       float(fraction)
-                    ])
+                
+                if self.experiment_type == 'ibmarl':
+                    fractions = fraction_map.get(group, [0.0] * len(rewards))
+                    for iteration, (reward,fraction) in enumerate(zip(rewards,fractions)):
+                        writer.writerow([
+                            iteration,
+                            group,
+                            float(reward),
+                        float(fraction)
+                        ])
+                else: 
+                   for iteration, (reward) in enumerate(rewards):
+                        writer.writerow([
+                            iteration,
+                            group,
+                            float(reward)
+                        ])
 
         print(f"Saved metrics to: {metrics_path.resolve()}")
 

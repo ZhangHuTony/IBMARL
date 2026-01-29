@@ -14,11 +14,10 @@ import matplotlib.pyplot as plt
 # ]
 
 files = [
-    ("results/maddpg_navigation_2026-01-24_17-56-17/data/metrics.csv", "maddpg"),
-    ("results/ibmarl_navigation_2026-01-24_18-33-38/data/metrics.csv", "ibmarl (soft temp 1)"),
-    ("results/ibmarl_navigation_2026-01-24_19-52-37/data/metrics.csv", "ibmarl (soft temp 0.1)"),
-    ("results/ibmarl_navigation_2026-01-24_20-38-11/data/metrics.csv", "ibmarl (soft temp 0.001)"),
-    ("results/ibmarl_navigation_2026-01-24_19-01-22/data/metrics.csv", "ibmarl (greedy)")
+    ("/home/tony-zhang/Research/IBMARL/results/ibmarl_navigation_2026-01-27_18-55-41/data/metrics.csv", "ibmarl strict(0.01)"),
+    ("/home/tony-zhang/Research/IBMARL/results/ibmarl_navigation_2026-01-28_10-34-21/data/metrics.csv", "ibmarl strict(0.1)"),
+    ("/home/tony-zhang/Research/IBMARL/results/ibmarl_navigation_2026-01-28_10-34-21/data/metrics.csv", "ibmarl (0.1)"),
+    ("/home/tony-zhang/Research/IBMARL/results/maddpg_navigation_2026-01-28_11-06-35/data/metrics.csv", "maddpg")
 ]
 
 plt.figure()
@@ -46,10 +45,9 @@ plt.show()
 
 
 files = [
-    ("results/ibmarl_navigation_2026-01-24_18-33-38/data/metrics.csv", "ibmarl (soft temp 1)"),
-    ("results/ibmarl_navigation_2026-01-24_19-52-37/data/metrics.csv", "ibmarl (soft temp 0.1)"),
-    ("results/ibmarl_navigation_2026-01-24_20-38-11/data/metrics.csv", "ibmarl (soft temp 0.001)"),
-    ("results/ibmarl_navigation_2026-01-24_19-01-22/data/metrics.csv", "ibmarl (greedy)")
+        ("/home/tony-zhang/Research/IBMARL/results/ibmarl_navigation_2026-01-27_18-55-41/data/metrics.csv", "ibmarl (0.01)"),
+        ("/home/tony-zhang/Research/IBMARL/results/ibmarl_navigation_2026-01-28_10-34-21/data/metrics.csv", "ibmarl (0.1)"),
+            ("/home/tony-zhang/Research/IBMARL/results/ibmarl_navigation_2026-01-28_10-34-21/data/metrics.csv", "ibmarl (0.1)"),
 ]
 
 

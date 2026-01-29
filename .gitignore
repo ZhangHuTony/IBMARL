@@ -34,9 +34,7 @@ wandb/
 # --------------------
 # Data
 # --------------------
-data/
-datasets/
-demonstrations/
+results/
 
 # --------------------
 # OS / editor junk

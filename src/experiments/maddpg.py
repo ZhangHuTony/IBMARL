@@ -6,7 +6,6 @@ import copy
 from tqdm import tqdm
 
 from src.experiments.base_marl_experiment import BaseMARLExperiment
-from src.experiments.ibmarl.modules import IndependentAgentPolicy
 
 from torchrl.modules import (
     MultiAgentMLP,

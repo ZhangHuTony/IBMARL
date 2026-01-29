@@ -54,7 +54,6 @@ class IbmarlExperiment(BaseMARLExperiment):
 
     def train(self):
         print("Training IBMARL Experiment...")
-        tau = float(self.config["training"]["polyak_tau"])
 
         pbar = tqdm(
             total= self.config.get('n_iters'),
@@ -74,10 +73,8 @@ class IbmarlExperiment(BaseMARLExperiment):
                 choices = batch.get((group, "arbiter_choice")) 
                 
                 if choices is not None:
-                    # In strict mode: 1=RL, 0=IL. Mean is exactly the fraction.
                     frac = choices.float().mean().item()
                     rl_action_fraction_map[group].append(frac)
-                    print(f"Group {group} RL Fraction: {frac:.4f}")
                 else:
                     print(f"Warning: No arbiter choice found for {group}")
                     
@@ -184,6 +181,7 @@ class IbmarlExperiment(BaseMARLExperiment):
 
         # deterministic policy (no exploration noise)
         render_policy = TensorDictSequential(*self.rl_policies.values())
+        
         render_policy.eval()
 
         with torch.no_grad():

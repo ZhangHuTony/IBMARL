@@ -26,7 +26,6 @@ class ActionArbiter:
         self.env = env
         self.device = device
 
-        self.metrics = {g: {"rl_action_count": 0, "total_action_count": 0} for g in env.group_map.keys()}
         
 
     def actor_proposal(self, group, obs, a_rl) -> torch.Tensor:
@@ -42,20 +41,7 @@ class ActionArbiter:
             return self._best_next_act_comb(group, next_obs)
         
 
-    def get_and_reset_metrics(self):
-        """Calculates fraction of RL actions taken since last reset."""
-        results = {}
-        for group, data in self.metrics.items():
-            if data["total_action_count"] > 0:
-                frac = data["rl_action_count"] / data["total_action_count"]
-            else:
-                frac = 0.0
-            results[group] = frac
-            
-            # Reset counters
-            data["rl_action_count"] = 0
-            data["total_action_count"] = 0
-        return results
+    
 
 
     def _best_act_comb(self, group, obs, a_rl) -> torch.Tensor:
@@ -69,7 +55,6 @@ class ActionArbiter:
         Output:
             a_exec: [B, N, act_dim] 
         '''
-        raise NotImplementedError
 
         # dimension verifications
         if obs.dim() != 3:
@@ -129,11 +114,22 @@ class ActionArbiter:
         else:
             raise RuntimeError(f"unexpected critic output shape: {list(q.shape)}")
         
-        best_k = torch.argmax(q_tot, dim=0)
+        if self.soft:
+                    # q_tot is [K, B]. Permute to [B, K] for Categorical distribution
+                    logits = q_tot.permute(1, 0) / self.temperature
+                    
+                    # Create distribution over the K permutations and sample
+                    dist = torch.distributions.Categorical(logits=logits)
+                    best_k = dist.sample() # [B]
+        else:
+                    best_k = torch.argmax(q_tot, dim=0) # [B]
 
         a_exec = joint[best_k, torch.arange(B, device=obs.device)]
 
-        return a_rl, None
+        perm_map = torch.tensor(choices, dtype=torch.float32, device=obs.device) # [K, N]
+        mask = perm_map[best_k] # [B, N]
+
+        return a_exec, mask
 
     def _best_act_strict(self, group: str, obs: torch.Tensor, a_rl: torch.Tensor) -> torch.Tensor:
         """
@@ -202,14 +198,13 @@ class ActionArbiter:
         else: 
             best_k = torch.argmax(q_tot, dim=0)  # [B], values in {0,1}
 
-        if group in self.metrics:
-            # best_k is 1 if RL was chosen, 0 if IL. Sum gives total RL choices.
-            self.metrics[group]["rl_action_count"] += best_k.sum().item()
-            self.metrics[group]["total_action_count"] += best_k.numel()
+    
 
         a_exec = joint[best_k, torch.arange(B, device=obs.device)]  # [B,N,act_dim]
 
-        return a_exec, best_k
+        mask = best_k.view(-1, 1).expand(-1, N).float()
+
+        return a_exec, mask
     
     def _best_next_act_strict(self, group, next_obs):
         '''
@@ -288,8 +283,6 @@ class ActionArbiter:
         td_pi = self.target_rl_policies[group](td_pi)
         a_rl = td_pi[(group, "action")]
 
-        return a_rl #no-bootstrapping
-
         #build all combinations
         cand = torch.stack([a_il, a_rl], dim=0)
         choices = list(itertools.product([0,1], repeat=N))
@@ -320,7 +313,17 @@ class ActionArbiter:
         else:
             raise RuntimeError(f"Unexpected target critic output shape: {list(q.shape)}")
         
-        best_k = torch.argmax(q_tot, dim = 0)
+        if self.soft:
+                    # q_tot is [K, B]. Permute to [B, K] for Categorical distribution
+                    logits = q_tot.permute(1, 0) / self.temperature
+                    
+                    # Create distribution over the K permutations and sample
+                    dist = torch.distributions.Categorical(logits=logits)
+                    best_k = dist.sample() # [B]
+        else:
+                    best_k = torch.argmax(q_tot, dim=0) # [B]
+
+
         a_next_star = joint[best_k, torch.arange(B, device = next_obs.device)]
 
         return a_next_star

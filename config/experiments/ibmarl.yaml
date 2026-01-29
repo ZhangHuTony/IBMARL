@@ -8,15 +8,14 @@ extends: "../base.yaml"
 
 #r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260115_211757/policy_checkpoint.pth" #36 demonstrations (average around 2)
 
-#r2bc_checkpoint_path : "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260112_204052/policy_checkpoint.pth"  #240 demonstrations
+r2bc_checkpoint_path : "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260112_204052/policy_checkpoint.pth"  #240 demonstrations
 
 #r2bc_checkpoint_path: "/home/tony-zWhang/Research/R2BC/results/navigation_r2bc_decent_20260116_092701/policy_checkpoint.pth" #54 demonstrations
 
-r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260126_210952/policy_checkpoint.pth" #36 demonstrations
-demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260126_210952/demonstrations.pt"
+#r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260127_185435/policy_checkpoint.pth" # demonstrations
+demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260127_185435/demonstrations.pt"
 
-
-strict : True #choose best combinatoion of policies or better policy actions
+strict : False #choose best combinatoion of policies or better policy actions
 
 soft : True
-temperature: 0.05
+temperature: 0.1
