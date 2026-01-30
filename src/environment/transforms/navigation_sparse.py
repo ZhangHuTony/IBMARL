@@ -66,9 +66,10 @@ class NavigationSparseReward(Transform):
 
         # ------------------ gt if close otherwise -1 ------------#
         out_penalty = -0.1
+        print("TD", td)
 
         gt_reward = td.get((self.group, "reward"))
-
+        
         # Calculate success mask: 1.0 if close enough, else 0.0
         success_mask = (dist < self.success_threshold).to(obs.dtype)
         
@@ -84,7 +85,13 @@ class NavigationSparseReward(Transform):
         new_reward = (gt_reward * success_mask) + (out_penalty * failure_mask)
 
         # Overwrite the default reward
-        td.set((self.group, "reward"), new_reward)
+        # td.set((self.group, "reward"), new_reward)
+
+        # print("NEW_REWARD", new_reward)
+        # print("GT_REWARD", gt_reward)
+        # print("Difference", new_reward - gt_reward)
+        # print("Success_mask", success_mask)
+        # print("Failure_mask", failure_mask)
 
         #----------------------------------------------------------_#
         

@@ -12,8 +12,10 @@ def build_transforms(config: dict):
     sparse_rewards = config.get("sparse_rewards", False)
 
     transforms = []
+    transform_repr = []
 
     if scenario == "navigation" and sparse_rewards:
+        transform_repr.append("NavigationSparseReward")
         transforms.append(
             NavigationSparseReward(
                 group="agents",
@@ -22,5 +24,5 @@ def build_transforms(config: dict):
                 rel_goal_slice=slice(0, 2), 
             )
         )
-    
+    print("Transformations added to environment:", transform_repr) 
     return transforms    

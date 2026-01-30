@@ -382,7 +382,7 @@ class MaddpgExperiment(BaseMARLExperiment):
         with torch.no_grad():
             with set_exploration_type(ExplorationType.MODE):
                 print("Rendering rollout...")
-                env_with_render.rollout(100, policy=render_policy)
+                env_with_render.rollout(500, policy=render_policy)
 
         print("Saving video...")
         env_with_render.transform.dump()
