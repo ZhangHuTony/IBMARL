@@ -5,13 +5,6 @@ import matplotlib.pyplot as plt
 
 
 
-# files = [
-#     ("results/randomm/data/metrics.csv", "random"),
-#     ("results/il_terrible_8/data/metrics.csv", "terrible (8)"),
-#     ("results/il_ok_24/data/metrics.csv", "ok (24)"),
-#     ("results/il_good_36/data/metrics.csv", "good (36)"),
-#     ("results/il_perfect_240/data/metrics.csv", "perfect (240)")
-# ]
 
 files = [
     ("/home/connor/Desktop/Projects/IBMARL/results/s42_maddpg_gt_reward/data/metrics.csv", "maddpg (old hypers)"),

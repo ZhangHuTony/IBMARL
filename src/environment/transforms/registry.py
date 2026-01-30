@@ -21,7 +21,7 @@ def build_transforms(config: dict):
                 group="agents",
                 success_threshold=config.get("success_threshold", 0.5),
                 # Ensure this matches your VMAS scenario observation layout
-                rel_goal_slice=slice(0, 2), 
+                rel_goal_slice=slice(4, 6), 
             )
         )
     print("Transformations added to environment:", transform_repr) 

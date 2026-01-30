@@ -65,11 +65,11 @@ class NavigationSparseReward(Transform):
         #--------------------------------------------------------#
 
         # ------------------ gt if close otherwise -1 ------------#
-        out_penalty = -0.1
-        print("TD", td)
+        out_penalty = -1
 
         gt_reward = td.get((self.group, "reward"))
-        
+
+
         # Calculate success mask: 1.0 if close enough, else 0.0
         success_mask = (dist < self.success_threshold).to(obs.dtype)
         
@@ -83,6 +83,21 @@ class NavigationSparseReward(Transform):
         # 1. Keep gt_reward where success_mask is 1
         # 2. Add -1.0 where failure_mask is 1 (which acts as the "else" condition)
         new_reward = (gt_reward * success_mask) + (out_penalty * failure_mask)
+
+        # if torch.rand(1) < 0.01: 
+        #     # Select First Batch, First Agent (index [0, 0])
+        #     d_val = dist[0, 0].item() 
+        #     r_val = new_reward[0, 0].item()
+        #     gt_val = gt_reward[0, 0].item()
+            
+        #     print(f"--- Debug Reward (Agent 0, Env 0) ---")
+        #     print(f"Dist: {d_val:.4f} | Threshold: {self.success_threshold}")
+        #     print(f"GT Reward: {gt_val:.4f} | Out Penalty: {out_penalty}")
+        #     print(f"Final Reward: {r_val:.4f}")
+            
+        #     # Sanity Check Alert
+        #     if d_val > self.success_threshold and r_val > -self.success_threshold:
+        #          print("WARNING: Penalty is not harsh enough! Agent might stay outside.")
 
         # Overwrite the default reward
         # td.set((self.group, "reward"), new_reward)

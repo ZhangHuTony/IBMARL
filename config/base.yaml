@@ -11,7 +11,7 @@ sparse_rewards: False #whether to use sparse rewards
 #Training Hyperparameters
 training:
   train_batch_size: 1024 #number of team frames sampled from replay buffer for each training iteration
-  lr: 3e-4 #learning rate for optimizers
+  lr: 1e-4 #learning rate for optimizers
   max_grad_norm: 1.0 #max norm for gradients
   n_optimiser_steps: 100 #number of optimizer steps per training iteration
   checkpoint_interval: 10 #number of iterations between saving policy checkpoint
