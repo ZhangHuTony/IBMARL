@@ -100,7 +100,13 @@ class NavigationSparseReward(Transform):
         #          print("WARNING: Penalty is not harsh enough! Agent might stay outside.")
 
         # Overwrite the default reward
-        td.set((self.group, "reward"), new_reward)
+        # td.set((self.group, "reward"), new_reward)
+
+        # print("NEW_REWARD", new_reward)
+        # print("GT_REWARD", gt_reward)
+        # print("Difference", new_reward - gt_reward)
+        # print("Success_mask", success_mask)
+        # print("Failure_mask", failure_mask)
 
         #----------------------------------------------------------_#
         
