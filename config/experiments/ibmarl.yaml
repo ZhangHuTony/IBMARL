@@ -26,7 +26,7 @@ demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_dec
 
 strict : False #choose best combinatoion of policies or better policy actions
 
-soft : True
-temperature: 0.1
+soft : False
+temperature: 0.05
 
-num_critics : 5
+num_critics : 3

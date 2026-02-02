@@ -7,14 +7,15 @@ import matplotlib.pyplot as plt
 
 
 baselines = [
-    {"value": -49.498165130615234, "label": "24 demonstration r2bc performance", "color": "orange", "style": "--"},
+    {"value": -57.55476379394531, "label": "24 demonstration r2bc performance", "color": "orange", "style": "--"},
     # Add more as needed...
 ]
 
 # --- CONFIGURATION: Your experiment files ---
 files = [
-    ("results/maddpg_navigation_2026-01-30_11-21-27/data/metrics.csv", "maddpg"),
-    ("results/ibmarl_navigation_2026-01-30_17-28-31/data/metrics.csv", "ibmarl comb (0.1 temp)")
+    ("results/maddpg_navigation_2026-02-01_21-36-48/data/metrics.csv", "maddpg"),
+    ("results/ibmarl_navigation_2026-02-01_20-30-50/data/metrics.csv", "ibmarl non-soft"),
+    ("results/ibmarl_navigation_2026-02-01_19-21-56/data/metrics.csv", "ibmarl soft ")
 ]
 
 plt.figure(figsize=(10, 6))
@@ -48,7 +49,7 @@ for file, label in files:
     except FileNotFoundError:
         print(f"Warning: File not found: {file}")
 
-plt.xlabel("Iteration")
+plt.xlabel("Interaction steps (x1000)")
 plt.ylabel("Episode Reward Mean")
 plt.title("Training Performance vs Baselines")
 plt.legend()
@@ -59,8 +60,8 @@ plt.show()
 
 files = [
    # ("results/maddpg_navigation_2026-01-30_11-21-27/data/metrics.csv", "maddpg"),
-    ("results/ibmarl_navigation_2026-01-30_12-24-23/data/metrics.csv", "ibmarl comb (0.1 temp)"),
-        ("results/ibmarl_navigation_2026-01-30_13-32-26/data/metrics.csv", "ibmarl comb (1 temp)")
+    ("results/ibmarl_navigation_2026-02-01_20-30-50/data/metrics.csv", "ibmarl non-soft"),
+    ("results/ibmarl_navigation_2026-02-01_19-21-56/data/metrics.csv", "ibmarl soft ")
 ]
 
 

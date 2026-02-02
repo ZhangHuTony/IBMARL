@@ -114,49 +114,52 @@ class GroupTrainer:
 
     def _ibmarl_value_loss(self, group:str, mb: TensorDictBase) -> torch.Tensor:
         '''
-        returns loss using bootstrap proposal
+        returns loss using bootstrap proposal, maintaining per-agent separation
         '''
 
         obs     = mb[(group, "observation")]
         act     = mb[(group, "action")]
-        rew     = mb[("next", group, "reward")]
-        done    = mb[("next", group, "done")]
+        rew     = mb[("next", group, "reward")]  # Shape: [B, N, 1]
+        done    = mb[("next", group, "done")]    # Shape: [B, N, 1] or [B, 1]
         next_obs= mb[("next", group, "observation")]
 
-      
-        #target calculation
+        # target calculation
         with torch.no_grad():
-            #--------BOOTSTRAPPING PART------------------#
+            # --------BOOTSTRAPPING PART------------------#
+            # a_next_star: [B, N, Act_Dim]
+            # q_next_val:  [B, N] (Minimized over 2 random critics, separate per agent)
             a_next_star, q_next_val = self.action_arbiter.bootstrap_proposal(group, next_obs)
 
-            if rew.dim() == 3: 
-                rew_tot = rew.sum(dim=1) # Sum over agents -> [B, 1]
-            else:
-                rew_tot = rew
-
-            q_target_val = q_next_val.view_as(rew_tot)
+           
+            # Do NOT sum rewards. We want specific targets for specific agents.
+            # Ensure shape is [B, N, 1]
+            if rew.dim() < 3:
+                 rew = rew.unsqueeze(-1)
             
-            done_mask = done.any(dim=1, keepdim=False).float()
+            # Reshape q_next_val to match reward: [B, N] -> [B, N, 1]
+            q_target_val = q_next_val.unsqueeze(-1)
             
-            # Ensure done_mask matches rew_tot dimensions (e.g. [B, 1])
-            done_mask = done_mask.view_as(rew_tot)
-
-            y = rew_tot + self.gamma * (1.0 - done_mask) * q_target_val
+            # Handle Done Mask
+            # If done is shared ([B, 1]), broadcast it. 
+            # If done is per-agent ([B, N, 1]), keep it.
+            if done.dim() == 2: # [B, 1]
+                 done = done.unsqueeze(-1) # [B, 1, 1]
+            
+            # Bellman Equation per Agent
+            # Y shape: [B, N, 1]
+            y = rew + self.gamma * (1.0 - done.float()) * q_target_val
         
 
         total_loss = 0
         td_cur = TensorDict({(group, "observation"): obs, (group, "action"): act}, batch_size=[obs.shape[0]], device = obs.device)
 
         for critic in self.critics[group]:
+            # q shape: [B, N, 1]
             q = critic(td_cur)[(group, "state_action_value")]
             
-            # q is likely [B, N, 1]. Sum over agents to match target y (which is team value)
-            if q.dim() == 3: 
-                q_sum = q.sum(dim=1) # [B, 1]
-            else:
-                q_sum = q
 
-            q_loss = F.mse_loss(q_sum, y)
+            q_loss = F.mse_loss(q, y)
+            
             total_loss += q_loss
         
         return total_loss
