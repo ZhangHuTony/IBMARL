@@ -1,0 +1,8 @@
+# Navigation environment configuration
+
+#Inherit from the base configuration
+extends: "../base.yaml"
+
+# Environment specific parameters
+n_agents: 2
+horizon: 200

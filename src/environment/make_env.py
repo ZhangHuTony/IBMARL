@@ -9,6 +9,7 @@ def make_env(config: dict, device) -> TransformedEnv:
     scenario_name = config.get("scenario_name")
     horizon = config.get("horizon", 100)
     num_vmas_env = config.get("frames_per_batch", 1000) // horizon
+    # num_vmas_env = 20
     seed = config.get("seed", 42)
 
     # Create the base Vmas environment
