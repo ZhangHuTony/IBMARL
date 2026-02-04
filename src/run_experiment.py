@@ -147,6 +147,7 @@ if __name__ == "__main__":
 
     #Optional Arguments (can override YAML)
     parser.add_argument("--render", action="store_true", help="Enable rendering")
+    parser.add_argument("--seed", type=int, help="Seed for the experiment")
 
     args = parser.parse_args()
 
@@ -154,6 +155,8 @@ if __name__ == "__main__":
     cfg = load_config(args.scenario_name, args.exp_type)
 
     cfg["render"] = bool(args.render)
+    if args.seed is not None:
+        cfg["seed"] = args.seed
 
     cfg = create_run_dirs(cfg)
 

@@ -13,17 +13,28 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG: dict[str, dict[str, list[str]]] = {
     "navigation": {
         "maddpg": [
-            "results/s42_nav_maddpg_gt_reward",
-            "results/s42_nav_maddpg_gt_reward_pt_2",
-            # Add more seed runs here, e.g.:
-            # "results/s43_nav_maddpg_gt_reward",
+            "results/initial_tests/maddpg_navigation_s1",
+            "results/initial_tests/maddpg_navigation_s2",
+            "results/initial_tests/maddpg_navigation_s3",
+            "results/initial_tests/maddpg_navigation_s4",
+            "results/initial_tests/maddpg_navigation_s5",
+
         ],
         "ibmarl": [
-            "results/maddpg_navigation_2026-01-29_13-32-46",
+            # "results/maddpg_navigation_2026-01-29_13-32-46",
             # Add more seed runs here
         ],
     },
     # Add more environments as needed:
+    "balance": {
+        "maddpg": [
+            "results/initial_tests/maddpg_balance_s1",
+            "results/initial_tests/maddpg_balance_s2",
+            "results/initial_tests/maddpg_balance_s3",
+            "results/initial_tests/maddpg_balance_s4",
+            "results/initial_tests/maddpg_balance_s5",
+        ],
+    },
     # "other_env": {
     #     "maddpg": ["results/s42_other_maddpg_gt_reward"],
     #     "ibmarl": ["results/s42_other_ibmarl_gt_reward"],
@@ -84,6 +95,7 @@ def main() -> None:
                 continue
             try:
                 iterations, mean, stderr = load_metrics_for_method(exp_dirs)
+                print("Plotting", method_name, "for", env_name, "with", len(mean), "datapoints")
                 ax.plot(iterations, mean, label=method_name)
                 ax.fill_between(
                     iterations,
