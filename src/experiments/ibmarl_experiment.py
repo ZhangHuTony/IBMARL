@@ -107,14 +107,14 @@ class IbmarlExperiment(BaseMARLExperiment):
 
 
                 for _ in range(self.config.get('training').get('n_optimiser_steps')):
-                    minibatch = self.replay_buffers[group].sample()
 
+                    for _ in range(self.config.get('training').get('num_critic_updates')):
+                        minibatch = self.replay_buffers[group].sample()
+                        self.trainer.update_critic(group, minibatch) #TODO: save returns
+                        self.trainer.polyak_step(self.critics[group], self.target_critics[group])
 
-                    self.trainer.update(group, minibatch) #TODO: save returns
-
+                    self.trainer.update_actor(group, minibatch) #TODO: save returns
                     self.trainer.polyak_step(self.rl_policies[group], self.target_policies[group])
-                    self.trainer.polyak_step(self.critics[group], self.target_critics[group])
-                    
 
 
                     # Annealing update for exploration noise

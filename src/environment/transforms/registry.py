@@ -19,7 +19,7 @@ def build_transforms(config: dict):
         transforms.append(
             NavigationSparseReward(
                 group="agents",
-                success_threshold=config.get("success_threshold", 0.5),
+                success_threshold=config.get("gt_radius"),
                 # Ensure this matches your VMAS scenario observation layout
                 rel_goal_slice=slice(4, 6), 
             )

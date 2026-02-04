@@ -7,6 +7,7 @@ from src.r2bc.mabc import DecentralizedMiniBC
 
 
 import torch
+import torch.nn as nn
 import copy
 
 from torchrl.modules import(
@@ -142,8 +143,12 @@ def build_rl_policies(cfg, env, device):
         exploration_policies[group] = exploration_policy
     
     return policies, exploration_policies
+
+
 def build_critics(cfg, env, device):
     print("Setting up IBMARL critic networks...")
+
+    ensemble_size = cfg.get('num_critics')
 
     critics = {}
     
@@ -152,33 +157,42 @@ def build_critics(cfg, env, device):
 
     for group, agents in env.group_map.items():
             
-            cat_module = TensorDictModule(
-                lambda obs, action: torch.cat([obs, action], dim=-1),
-                in_keys=[(group, "observation"), (group, "action")],
-                out_keys=[(group, "obs_action")],
-            )
+            group_ensemble = nn.ModuleList()
 
-            critic_module = TensorDictModule(
-                module = MultiAgentMLP(
-                    n_agent_inputs= env.observation_spec[group, "observation"].shape[-1]
-                    + env.full_action_spec[group, "action"].shape[-1],
-                    n_agent_outputs=1,
-                    n_agents = len(agents),
-                    centralized=centralized,
-                    share_params= share_critic_params,
-                    device = device,
-                    depth = 2,
-                    num_cells = 256,
-                    activation_class= torch.nn.Tanh
-                ),
-                in_keys=[(group, "obs_action")],
-                out_keys=[(group, "state_action_value")],
-            )
+            for _ in range(ensemble_size):
+            
+                cat_module = TensorDictModule(
+                    lambda obs, action: torch.cat([obs, action], dim=-1),
+                    in_keys=[(group, "observation"), (group, "action")],
+                    out_keys=[(group, "obs_action")],
+                )
 
-            critics[group] = TensorDictSequential(
-                cat_module,
-                critic_module
-            )
+                critic_module = TensorDictModule(
+                    module = MultiAgentMLP(
+                        n_agent_inputs= env.observation_spec[group, "observation"].shape[-1]
+                        + env.full_action_spec[group, "action"].shape[-1],
+                        n_agent_outputs=1,
+                        n_agents = len(agents),
+                        centralized=centralized,
+                        share_params= share_critic_params,
+                        device = device,
+                        depth = 2,
+                        num_cells = 256,
+                        activation_class= torch.nn.Tanh
+                    ),
+                    in_keys=[(group, "obs_action")],
+                    out_keys=[(group, "state_action_value")],
+                )
+
+                
+
+                ensemble_member = TensorDictSequential(
+                    cat_module,
+                    critic_module
+                )
+                group_ensemble.append(ensemble_member)
+            
+            critics[group] = group_ensemble
     
     return critics
 
@@ -193,7 +207,9 @@ def build_targets(policies, critics, env):
     for g in env.group_map.keys():
         for p in target_policies[g].parameters():
             p.requires_grad_(False)
-        for p in target_critics[g].parameters():
-            p.requires_grad_(False)
+
+        for critic_member in target_critics[g]:
+            for p in critic_member.parameters():
+                p.requires_grad_(False)
     
     return target_policies, target_critics

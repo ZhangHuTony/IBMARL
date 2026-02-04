@@ -2,7 +2,7 @@
 
 #common parameters
 seed: 42
-frames_per_batch: 10000 #number of team frames collected per sampling iteration
+frames_per_batch: 1000 #number of team frames collected per sampling iteration
 n_iters: 250 #number of sampling and training iterations
 memory_size: 1000000 # replay buffer of each group can store this many frames
 horizon: 100
@@ -13,8 +13,9 @@ training:
   train_batch_size: 1000 #number of team frames sampled from replay buffer for each training iteration
   lr: 1e-4 #learning rate for optimizers
   max_grad_norm: 1.0 #max norm for gradients
-  n_optimiser_steps: 100 #number of optimizer steps per training iteration
+  n_optimiser_steps: 500 #number of optimizer steps per training iteration
   checkpoint_interval: 10 #number of iterations between saving policy checkpoint
   # DDPG 
   gamma: 0.99 #discount factor
-  polyak_tau: 0.0005 #target network update rate
+  polyak_tau: 0.001 #target network update rate
+  num_critic_updates: 3

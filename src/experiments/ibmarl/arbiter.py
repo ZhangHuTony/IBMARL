@@ -3,6 +3,7 @@ class used to find the best action combination given an IL policy and Critic
 '''
 import torch
 import itertools
+import numpy as np
 from tensordict import TensorDict
 
 class ActionArbiter:
@@ -26,6 +27,8 @@ class ActionArbiter:
         self.env = env
         self.device = device
 
+        self.num_critics = config.get("num_critics")
+
         
 
     def actor_proposal(self, group, obs, a_rl) -> torch.Tensor:
@@ -41,8 +44,26 @@ class ActionArbiter:
             return self._best_next_act_comb(group, next_obs)
         
 
+    def _sample_critic_indices(self):
+         '''
+         helper to sample 2 random critics from the ensemble
+         '''
+         if self.num_critics <=2:
+              return list(range(self.num_critics))
+         return np.random.choice(self.num_critics, 2, replace=False)
     
+    def _evaluate_critics(self, group, td, indices):
+         '''
+         evaluates specific members of the target ensemble
+         '''
+         q_list = []
+         for i in indices:
+              q = self.target_critics[group][i](td)[(group, "state_action_value")]
+              q_list.append(q)
+              
+         q_stack = torch.stack(q_list, dim = 0)
 
+         return q_stack
 
     def _best_act_comb(self, group, obs, a_rl) -> torch.Tensor:
         '''
@@ -102,17 +123,15 @@ class ActionArbiter:
             device = obs.device,
         )
 
-        q = self.target_critics[group](td)[(group, "state_action_value")]
+        indices = self._sample_critic_indices()
 
-        #reduce q to value per permutation and environemt (k,b)
-        # if value assigned per agent would be: [K,B,N,1]
-        # if already aggregated [K,B, 1]
-        if q.dim() == 4:
-            q_tot = q.sum(dim=2).squeeze(-1)
-        elif q.dim() == 3:
-            q_tot = q.squeeze(-1)
-        else:
-            raise RuntimeError(f"unexpected critic output shape: {list(q.shape)}")
+        # Returns stacked Q-values: [2, K, B, N, 1]
+        q_subset = self._evaluate_critics(group, td, indices)
+
+        # Result: [K, B, N, 1]
+        q_min_per_agent, _ = torch.min(q_subset, dim=0)
+
+        q_tot = q_min_per_agent.sum(dim=2).squeeze(-1)
         
         if self.soft:
                     # q_tot is [K, B]. Permute to [B, K] for Categorical distribution
@@ -130,7 +149,72 @@ class ActionArbiter:
         mask = perm_map[best_k] # [B, N]
 
 
-        return a_rl, mask
+        return a_exec, mask
+    
+    def _best_next_act_comb(self, group, next_obs):
+        '''
+        Used for bootstrap proposal
+        '''
+
+        B, N, obs_dim = next_obs.shape
+        act_dim = self.env.full_action_spec[group, "action"].shape[-1]
+
+        #IL candidate
+        a_il = self.il_policy.get_action(group, next_obs)
+
+
+        #target RL-candidate
+        td_pi = TensorDict({(group, "observation"): next_obs}, batch_size=[B], device = next_obs.device)
+        td_pi = self.target_rl_policies[group](td_pi)
+        a_rl = td_pi[(group, "action")]
+
+        #build all combinations
+        cand = torch.stack([a_il, a_rl], dim=0)
+        choices = list(itertools.product([0,1], repeat=N))
+        K = len(choices)
+
+        joint=[]
+        for choice in choices:
+            a_k = torch.stack([cand[choice[i], :, i, :] for i in range(N)], dim = 1)
+            joint.append(a_k)
+        joint = torch.stack(joint, dim=0)
+
+        #score each combination
+        td_q = TensorDict(
+            {
+                (group, "observation"): next_obs.unsqueeze(0).expand(K, B, N, obs_dim),
+                (group, "action"): joint,
+            },
+            batch_size=[K,B],
+            device = next_obs.device,
+        )
+
+        indices = self._sample_critic_indices()
+        q_subset = self._evaluate_critics(group, td_q, indices=indices) #should have shape [2, K, B, N, 1]
+
+        q_min_per_agent, _ = torch.min(q_subset, dim=0) 
+
+        q_vals = q_min_per_agent.squeeze(-1)
+
+        q_sum_for_selection = q_vals.sum(dim=2)
+
+        if self.soft:
+            # Permute to [B, K] for Categorical distribution
+            logits = q_sum_for_selection.permute(1, 0) / self.temperature
+            dist = torch.distributions.Categorical(logits=logits)
+            best_k = dist.sample() # [B]
+        else:
+            best_k = torch.argmax(q_sum_for_selection, dim=0) # [B]
+
+
+        # Gather the best action: [B, N, Act_Dim]
+        a_next_star = joint[best_k, torch.arange(B, device=next_obs.device)]
+        
+        # Gather the per-agent Q-values: [B, N]
+        # Crucial: We use q_vals (separated), NOT q_sum_for_selection
+        q_star = q_vals[best_k, torch.arange(B, device=next_obs.device)]
+
+        return a_next_star, q_star
 
     def _best_act_strict(self, group: str, obs: torch.Tensor, a_rl: torch.Tensor) -> torch.Tensor:
         """
@@ -174,35 +258,40 @@ class ActionArbiter:
             device=obs.device,
         )
 
-        q = self.target_critics[group](td)[(group, "state_action_value")]
+        # 1. Sample 2 random critics
+        indices = self._sample_critic_indices()
 
-        # Reduce to [2, B] so we can argmax over the 2 options
-        if q.dim() == 4:          # [2,B,N,1]
-            q_tot = q.sum(dim=2).squeeze(-1)  # [2,B]
-        elif q.dim() == 3:        # [2,B,1]
-            q_tot = q.squeeze(-1)            # [2,B]
-        else:
-            raise RuntimeError(f"unexpected critic output shape: {list(q.shape)}")
+        # 2. Evaluate ONLY those 2 critics
+        # Returns stacked Q-values: [2, Candidates=2, B, N, 1]
+        q_subset = self._evaluate_critics(group, td, indices)
 
+        # 3. Take Min over the Ensemble subset (dim=0)
+        # We want the conservative estimate for every agent in both candidates
+        # Result: [Candidates=2, B, N, 1]
+        q_min_per_agent, _ = torch.min(q_subset, dim=0)
 
+        # 4. Aggregate for Selection (Sum over agents to pick best joint strategy)
+        # Sum dim 2 (Agents) -> [2, B, 1] -> Squeeze -> [2, B]
+        q_tot = q_min_per_agent.sum(dim=2).squeeze(-1)
+
+        # -----------------------------------------------------------
+        # Selection Logic
+        # -----------------------------------------------------------
 
         if self.soft:
-      
+            # Permute to [B, 2] for Categorical distribution
             logits = q_tot.permute(1, 0) / self.temperature
 
-            # 3. Create distribution and sample
-            # This effectively performs softmax(logits) and samples index 0 or 1
+            # Create distribution and sample (0 or 1)
             dist = torch.distributions.Categorical(logits=logits)
-            
             best_k = dist.sample() # [B]
-
         else: 
             best_k = torch.argmax(q_tot, dim=0)  # [B], values in {0,1}
 
-    
-
+        # Gather the selected action
         a_exec = joint[best_k, torch.arange(B, device=obs.device)]  # [B,N,act_dim]
 
+        # Create mask: 0 if IL was chosen, 1 if RL was chosen
         mask = best_k.view(-1, 1).expand(-1, N).float()
 
         return a_exec, mask
@@ -225,8 +314,6 @@ class ActionArbiter:
         td_pi = self.target_rl_policies[group](td_pi)
         a_rl = td_pi[(group, "action")]
 
-        #return a_rl #no-bootstrapping
-
         joint = torch.stack([a_il, a_rl], dim =0)
 
     
@@ -239,93 +326,46 @@ class ActionArbiter:
             device = next_obs.device,
         )
 
-        q = self.target_critics[group](td_q)[(group, "state_action_value")]
+        # A. Sample 2 indices
+        indices = self._sample_critic_indices()
+        
+        # B. Evaluate only those 2 critics
+        # Expected Output Shape: [2, Candidates=2, B, N, 1]
+        q_subset = self._evaluate_critics(group, td_q, indices=indices)
 
-        if q.dim() == 4:
-            q_tot = q.sum(dim=2).squeeze(-1)
-        elif q.dim() == 3:
-            q_tot = q.squeeze(-1)
-        else:
-            raise RuntimeError(f"Unexpected target critic output shape: {list(q.shape)}")
+        # C. Take Min over Ensemble Dimension (dim=0)
+        # Result Shape: [Candidates=2, B, N, 1]
+        q_min_per_agent, _ = torch.min(q_subset, dim=0)
+        
+        # Squeeze: [2, B, N]
+        q_vals = q_min_per_agent.squeeze(-1)
+
+        # ------------------------------------------------------------------
+        # SELECTION
+        # ------------------------------------------------------------------
+
+        # Sum over agents for selection score
+        # Shape: [2, B]
+        q_sum_for_selection = q_vals.sum(dim=2)
         
         if self.soft:
-      
-            logits = q_tot.permute(1, 0) / self.temperature
-
-            # 3. Create distribution and sample
-            # This effectively performs softmax(logits) and samples index 0 or 1
+            logits = q_sum_for_selection.permute(1, 0) / self.temperature
             dist = torch.distributions.Categorical(logits=logits)
-            
             best_k = dist.sample() # [B]
-
         else: 
-            best_k = torch.argmax(q_tot, dim=0)  # [B], values in {0,1}
+            best_k = torch.argmax(q_sum_for_selection, dim=0)  # [B], values in {0,1}
 
-        a_next_star = joint[best_k, torch.arange(B, device = next_obs.device)]
+        # ------------------------------------------------------------------
+        # RETURN
+        # ------------------------------------------------------------------
 
-        return a_next_star
-    
-
-
-    def _best_next_act_comb(self, group, next_obs):
-        '''
-        Used for bootstrap proposal
-        '''
-
-        B, N, obs_dim = next_obs.shape
-        act_dim = self.env.full_action_spec[group, "action"].shape[-1]
-
-        #IL candidate
-        a_il = self.il_policy.get_action(group, next_obs)
-
-
-        #target RL-candidate
-        td_pi = TensorDict({(group, "observation"): next_obs}, batch_size=[B], device = next_obs.device)
-        td_pi = self.target_rl_policies[group](td_pi)
-        a_rl = td_pi[(group, "action")]
-
-        #build all combinations
-        cand = torch.stack([a_il, a_rl], dim=0)
-        choices = list(itertools.product([0,1], repeat=N))
-        K = len(choices)
-
-        joint=[]
-        for choice in choices:
-            a_k = torch.stack([cand[choice[i], :, i, :] for i in range(N)], dim = 1)
-            joint.append(a_k)
-        joint = torch.stack(joint, dim=0)
-
-        #score each combination
-        td_q = TensorDict(
-            {
-                (group, "observation"): next_obs.unsqueeze(0).expand(K, B, N, obs_dim),
-                (group, "action"): joint,
-            },
-            batch_size=[K,B],
-            device = next_obs.device,
-        )
-
-        q = self.target_critics[group](td_q)[(group, "state_action_value")]
-
-        if q.dim() == 4:
-            q_tot = q.sum(dim=2).squeeze(-1)
-        elif q.dim() == 3:
-            q_tot = q.squeeze(-1)
-        else:
-            raise RuntimeError(f"Unexpected target critic output shape: {list(q.shape)}")
+        # Gather best action
+        a_next_star = joint[best_k, torch.arange(B, device=next_obs.device)]
         
-        if self.soft:
-                    # q_tot is [K, B]. Permute to [B, K] for Categorical distribution
-                    logits = q_tot.permute(1, 0) / self.temperature
-                    
-                    # Create distribution over the K permutations and sample
-                    dist = torch.distributions.Categorical(logits=logits)
-                    best_k = dist.sample() # [B]
-        else:
-                    best_k = torch.argmax(q_tot, dim=0) # [B]
+        # Gather per-agent Q-values (separated)
+        q_star = q_vals[best_k, torch.arange(B, device=next_obs.device)]
+
+        return a_next_star, q_star
 
 
-        a_next_star = joint[best_k, torch.arange(B, device = next_obs.device)]
-
-        return a_next_star
     

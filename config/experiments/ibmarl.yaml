@@ -12,10 +12,21 @@ extends: "../base.yaml"
 
 #r2bc_checkpoint_path: "/home/tony-zWhang/Research/R2BC/results/navigation_r2bc_decent_20260116_092701/policy_checkpoint.pth" #54 demonstrations
 
-r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_133756/policy_checkpoint.pth" # demonstrations
-demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_133756/demonstrations.pt"
+#r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_133756/policy_checkpoint.pth" # 50 demonstrations
+#demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_133756/demonstrations.pt"
 
-strict : True #choose best combinatoion of policies or better policy actions
+# r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_153124/policy_checkpoint.pth" #24 demonstrations
+# demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_153124/demonstrations.pt"
 
-soft : True
-temperature: 0.1
+# r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_201300/policy_checkpoint.pth" #24 demonstrations .25 radius
+# demonstrations_path: '/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_201300/demonstrations.pt'
+
+r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260130_122306/policy_checkpoint.pth" #24 demonstrations .4 radius
+demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260130_122306/demonstrations.pt"
+
+strict : False #choose best combinatoion of policies or better policy actions
+
+soft : False
+temperature: 0.05
+
+num_critics : 3
