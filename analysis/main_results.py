@@ -8,43 +8,46 @@ from pathlib import Path
 # Project root (parent of analysis/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# Config: env/task name -> {method name -> list of experiment directories}
-# Experiment dirs are relative to PROJECT_ROOT; each contains data/metrics.csv
-CONFIG: dict[str, dict[str, list[str]]] = {
-    "navigation": {
-        "maddpg": [
-            "results/initial_tests/maddpg_navigation_s1",
-            "results/initial_tests/maddpg_navigation_s2",
-            "results/initial_tests/maddpg_navigation_s3",
-            "results/initial_tests/maddpg_navigation_s4",
-            "results/initial_tests/maddpg_navigation_s5",
-
-        ],
-        "ibmarl": [
-            # "results/maddpg_navigation_2026-01-29_13-32-46",
-            # Add more seed runs here
-        ],
+# Config: env/task name -> {method name -> parent directory or float value}
+# Parent dir (string) is relative to PROJECT_ROOT; code scans it for seed subdirs (each with data/metrics.csv)
+# Float value draws a dashed horizontal line at that y-value
+CONFIG: dict[str, dict[str, str | float]] = {
+    "navigation_dense": {
+        "r2bc": -2.18,
+        "maddpg": "results/maddpg_gt/navigation",
+        "ibmarl": "results/ibmarl_gt/navigation",
     },
-    # Add more environments as needed:
-    "balance": {
-        "maddpg": [
-            "results/initial_tests/maddpg_balance_s1",
-            "results/initial_tests/maddpg_balance_s2",
-            "results/initial_tests/maddpg_balance_s3",
-            "results/initial_tests/maddpg_balance_s4",
-            "results/initial_tests/maddpg_balance_s5",
-        ],
+    "navigation_sparse": {
+        "r2bc": -2.18,
+        "maddpg": "results/maddpg_sparse/navigation",
+        "ibmarl": "results/ibmarl_sparse/navigation",
     },
-    # "other_env": {
-    #     "maddpg": ["results/s42_other_maddpg_gt_reward"],
-    #     "ibmarl": ["results/s42_other_ibmarl_gt_reward"],
-    # },
+    "buzz_wire": {
+        "maddpg": "results/new_initial_tests/buzz_wire",
+    },
+    "transport": {
+        "maddpg": "results/new_initial_tests/transport",
+    },
 }
 
 
-def load_metrics_for_method(exp_dirs: list[str], metric: str = "episode_reward_mean") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def discover_seed_dirs(parent_dir: str) -> list[Path]:
+    """Scan parent directory for seed subdirs (direct children that contain data/metrics.csv)."""
+    parent = PROJECT_ROOT / parent_dir
+    if not parent.is_dir():
+        raise FileNotFoundError(f"Parent directory not found: {parent}")
+    seed_dirs = []
+    for p in sorted(parent.iterdir()):
+        if p.is_dir() and (p / "data" / "metrics.csv").exists():
+            seed_dirs.append(p)
+    if not seed_dirs:
+        raise FileNotFoundError(f"No seed dirs with data/metrics.csv found in {parent}")
+    return seed_dirs
+
+
+def load_metrics_for_method(parent_dir: str, metric: str = "episode_reward_mean") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Load metrics from multiple experiment directories (seeds) and compute
+    Load metrics from all seed subdirs under parent_dir and compute
     mean and standard error across seeds.
 
     Returns:
@@ -52,11 +55,10 @@ def load_metrics_for_method(exp_dirs: list[str], metric: str = "episode_reward_m
         mean: mean across seeds at each iteration
         stderr: standard error (std / sqrt(n)) at each iteration
     """
+    seed_dirs = discover_seed_dirs(parent_dir)
     dfs = []
-    for exp_dir in exp_dirs:
-        path = PROJECT_ROOT / exp_dir / "data" / "metrics.csv"
-        if not path.exists():
-            raise FileNotFoundError(f"Metrics file not found: {path}")
+    for exp_dir in seed_dirs:
+        path = exp_dir / "data" / "metrics.csv"
         df = pd.read_csv(path)
         dfs.append(df[["iteration", metric]].rename(columns={metric: "value"}))
 
@@ -90,21 +92,31 @@ def main() -> None:
 
     for idx, (env_name, methods) in enumerate(CONFIG.items()):
         ax = axes[idx]
-        for method_name, exp_dirs in methods.items():
-            if not exp_dirs:
+        for method_name, value in methods.items():
+            if value is None:
                 continue
-            try:
-                iterations, mean, stderr = load_metrics_for_method(exp_dirs)
-                print("Plotting", method_name, "for", env_name, "with", len(mean), "datapoints")
-                ax.plot(iterations, mean, label=method_name)
-                ax.fill_between(
-                    iterations,
-                    mean - stderr,
-                    mean + stderr,
-                    alpha=0.3,
-                )
-            except FileNotFoundError as e:
-                print(f"Skipping {method_name} for {env_name}: {e}")
+            if isinstance(value, float):
+                # Draw a dashed horizontal line at the float value
+                ax.axhline(y=value, linestyle="--", label=method_name, alpha=0.7)
+                print(f"Drawing horizontal line for {method_name} at {value} for {env_name}")
+            elif isinstance(value, str):
+                # Original behavior: load metrics from directory
+                if not value:
+                    continue
+                try:
+                    iterations, mean, stderr = load_metrics_for_method(value)
+                    print("Plotting", method_name, "for", env_name, "with", len(mean), "datapoints")
+                    ax.plot(iterations, mean, label=method_name)
+                    ax.fill_between(
+                        iterations,
+                        mean - stderr,
+                        mean + stderr,
+                        alpha=0.3,
+                    )
+                except FileNotFoundError as e:
+                    print(f"Skipping {method_name} for {env_name}: {e}")
+            else:
+                print(f"Warning: Unexpected type for {method_name} in {env_name}: {type(value)}")
 
         ax.set_xlabel("Iteration")
         ax.set_ylabel("Episode Reward Mean")

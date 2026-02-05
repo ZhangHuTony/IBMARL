@@ -21,8 +21,8 @@ extends: "../base.yaml"
 # r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_201300/policy_checkpoint.pth" #24 demonstrations .25 radius
 # demonstrations_path: '/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_201300/demonstrations.pt'
 
-r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260130_122306/policy_checkpoint.pth" #24 demonstrations .4 radius
-demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260130_122306/demonstrations.pt"
+r2bc_checkpoint_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/policy_checkpoint.pth" #24 demonstrations .4 radius
+demonstrations_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/demonstrations.pt"
 
 strict : False #choose best combinatoion of policies or better policy actions
 
