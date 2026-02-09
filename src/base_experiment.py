@@ -43,8 +43,9 @@ class BaseExperiment:
 
             
 
-    def train(self):
+    def train(self) -> str:
         raise NotImplementedError("Subclasses should implement this method.")
+        return "Training Done"
     
     def evaluate(self):
         raise NotImplementedError("Subclasses should implement this method.")

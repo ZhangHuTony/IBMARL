@@ -231,7 +231,7 @@ class BaseMARLExperiment:
         raise NotImplementedError
     
     @abstractmethod
-    def train(self):
+    def train(self) -> str:
         ...
     
 
