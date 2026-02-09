@@ -78,7 +78,7 @@ class IbmarlExperiment(BaseMARLExperiment):
 
         return mean_reward_by_group
 
-    def train(self):
+    def train(self) -> str:
         print("Training IBMARL Experiment...")
 
         pbar = tqdm(
@@ -183,6 +183,8 @@ class IbmarlExperiment(BaseMARLExperiment):
         self.results["episode_reward_mean_map"] = episode_reward_mean_map
         self.results["rl_action_fraction"] = rl_action_fraction_map
         self.results["rl_only_episode_reward_mean_map"] = rl_only_episode_reward_mean_map
+
+        return f"IBMARL training complete. Environment: {self.config['scenario_name']}, Experiment Type: {self.experiment_type}, Seed: {self.seed}.\n\nResults: {self.results['rl_only_episode_reward_mean_map']['agents'][-10:]}"
 
     def save_results(self):
         """Override to add RL policy video/gif creation for IBMARL."""

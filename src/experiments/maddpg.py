@@ -247,9 +247,7 @@ class MaddpgExperiment(BaseMARLExperiment):
         self.results["group_map_keys"] = self.env.group_map.keys()
         self.results["episode_reward_mean_map"] = episode_reward_mean_map
 
-        
-
-
+        return f"MADDPG training complete. Environment: {self.config['scenario_name']}, Experiment Type: {self.experiment_type}, Seed: {self.seed}.\n\nResults: {self.results['episode_reward_mean_map']['agents'][-10:]}"
 
 
     def _setup_data_collection(self):

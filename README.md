@@ -30,3 +30,10 @@ IBMARL/
 ```
 
 
+
+### Push Notifications
+To recieve notifications about experiments, create a Pushover account, create an application, and export your keys as environment variables in your bash setup (or whatever shell you use).
+```
+echo "export PUSHOVER_APP_TOKEN=<YOUR_APP_TOKEN>" >> ~/.bashrc
+echo "export PUSHOVER_USER_KEY=<YOUR_USER_KEY>" >> ~/.bashrc 
+```

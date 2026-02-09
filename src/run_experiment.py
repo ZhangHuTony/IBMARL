@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 import matplotlib.pyplot as plt
 from datetime import datetime
+from src.util import PushoverNotifier
 
 from src.experiment_registry import EXPERIMENT_REGISTRY
 
@@ -111,11 +112,15 @@ def run_experiment(cfg):
         raise ValueError(f"Experiment type {cfg['exp_type']} not found in registry.")
 
     experiment = ExperimentClass(cfg)
-    experiment.train()
+    results_str = experiment.train()
 
     experiment.save_results()
     if cfg.get("render"):
         experiment.render_policy()
+
+    print(results_str)
+    notifier = PushoverNotifier()
+    notifier.send_message(results_str)
 
 
 # WILL REMOVE AND ADD TO AN ANALYSIS SCRIPT
