@@ -345,9 +345,6 @@ class MaddpgExperiment(BaseMARLExperiment):
                 )
         return batch
     
-    def save_checkpoint(self):
-        raise NotImplementedError
-
     def render_policy(self):
 
         results_dir = self.render_path
