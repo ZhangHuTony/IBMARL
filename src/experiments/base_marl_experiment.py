@@ -55,10 +55,10 @@ class BaseMARLExperiment:
 
     def _setup_device(self):
         # setup device (CPU/GPU) 
-        is_fork = multiprocessing.get_start_method() == 'fork'
+        # is_fork = multiprocessing.get_start_method() == 'fork'
         device =(
             torch.device(0)
-            if torch.cuda.is_available() and not is_fork
+            if torch.cuda.is_available()
             else torch.device("cpu")
         )
 
