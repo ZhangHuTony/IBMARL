@@ -189,7 +189,10 @@ class IbmarlExperiment(BaseMARLExperiment):
     def save_results(self):
         """Override to add RL policy video/gif creation for IBMARL."""
         super().save_results()
-        self._create_rl_policy_video_and_gif()
+        try:
+            self._create_rl_policy_video_and_gif()
+        except Exception as e:
+            print(f"Could not save RL policy video: {e}")
 
     def save_checkpoint(self):
         """Base implementation saves self.rl_policies to check_dir."""
@@ -280,9 +283,11 @@ class IbmarlExperiment(BaseMARLExperiment):
 
     def render_policy(self):
         """Render the RL policy only (not combined IL/RL). Uses _create_rl_policy_video_and_gif."""
-        self._create_rl_policy_video_and_gif()  # Skips if already created by save_results
+        try:
+            self._create_rl_policy_video_and_gif()  # Skips if already created by save_results
+        except Exception as e:
+            print(f"Could not render RL policy: {e}")
     
- 
 
 
     

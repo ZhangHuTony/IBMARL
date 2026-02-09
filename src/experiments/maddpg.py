@@ -345,44 +345,48 @@ class MaddpgExperiment(BaseMARLExperiment):
     
     def render_policy(self):
 
-        results_dir = self.render_path
+        try:
+            results_dir = self.render_path
 
 
-        video_logger = CSVLogger(
-            exp_name="vmas_logs",
-            log_dir=str(results_dir),
-            video_format="mp4",
-        )
-
-        print("Creating rendering env")
-        env_with_render = TransformedEnv(self.env.base_env, self.env.transform.clone())
-
-        env_with_render = env_with_render.append_transform(
-            PixelRenderTransform(
-                out_keys=["pixels"],
-                preproc=lambda x: x.copy(),  # fix negative stride issue
-                as_non_tensor=True,
-                mode="rgb_array",
+            video_logger = CSVLogger(
+                exp_name="vmas_logs",
+                log_dir=str(results_dir),
+                video_format="mp4",
             )
-        )
 
-        env_with_render = env_with_render.append_transform(
-            VideoRecorder(logger=video_logger, tag="vmas_rendered")
-        )
+            print("Creating rendering env")
+            env_with_render = TransformedEnv(self.env.base_env, self.env.transform.clone())
 
-        # deterministic policy (no exploration noise)
-        render_policy = TensorDictSequential(*self.policies.values())
-        render_policy.eval()
+            env_with_render = env_with_render.append_transform(
+                PixelRenderTransform(
+                    out_keys=["pixels"],
+                    preproc=lambda x: x.copy(),  # fix negative stride issue
+                    as_non_tensor=True,
+                    mode="rgb_array",
+                )
+            )
 
-        with torch.no_grad():
-            with set_exploration_type(ExplorationType.MODE):
-                print("Rendering rollout...")
-                env_with_render.rollout(500, policy=render_policy)
+            env_with_render = env_with_render.append_transform(
+                VideoRecorder(logger=video_logger, tag="vmas_rendered")
+            )
 
-        print("Saving video...")
-        env_with_render.transform.dump()
+            # deterministic policy (no exploration noise)
+            render_policy = TensorDictSequential(*self.policies.values())
+            render_policy.eval()
 
-        print("Saved! Video location:")
-        video_logger.print_log_dir()
+            with torch.no_grad():
+                with set_exploration_type(ExplorationType.MODE):
+                    print("Rendering rollout...")
+                    env_with_render.rollout(500, policy=render_policy)
+
+            print("Saving video...")
+            env_with_render.transform.dump()
+
+            print("Saved! Video location:")
+            video_logger.print_log_dir()
+        
+        except Exception as e:
+            print(f"Could not render policy: {e}")
 
         
