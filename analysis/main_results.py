@@ -12,22 +12,43 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Parent dir (string) is relative to PROJECT_ROOT; code scans it for seed subdirs (each with data/metrics.csv)
 # Float value draws a dashed horizontal line at that y-value
 CONFIG: dict[str, dict[str, str | float]] = {
+    
+    # DENSE REWARDS
     "navigation_dense": {
-        "r2bc": -2.18,
-        "maddpg": "results/maddpg_gt/navigation",
-        "ibmarl": "results/ibmarl_gt/navigation",
+        # "r2bc": -2.18,
+        "maddpg": "results/maddpg_gt_dense_final",
+        "ibmarl (no replay init)": "results/ibmarl_navigation_dense",
+        "ibmarl": "results/ibmarl_navigation_dense_w_replay",
     },
-    "navigation_sparse": {
-        "r2bc": -2.18,
-        "maddpg": "results/maddpg_sparse/navigation",
-        "ibmarl": "results/ibmarl_sparse/navigation",
+
+    "balance_dense": {
+        # "r2bc": -2.18,
+        "maddpg": "results/maddpg_balance_dense",
+        "ibmarl": "results/ibmarl_balance_dense",
     },
-    "buzz_wire": {
-        "maddpg": "results/new_initial_tests/buzz_wire",
-    },
-    "transport": {
-        "maddpg": "results/new_initial_tests/transport",
-    },
+    # "buzz_wire_dense": {
+    #     # "r2bc": -2.18,
+    #     "maddpg": "results/maddpg_buzzwire_dense",
+    #     # "ibmarl": "results/ibmarl_buzz_wire_dense",
+    # },
+    # "transport_dense": {
+    #     # "r2bc": -2.18,
+    #     "maddpg": "results/maddpg_transport_dense",
+    #     # "ibmarl": "results/ibmarl_transport_dense",
+    # },
+
+    # SPARSE REWARDS
+    # "navigation_sparse": {
+    #     # "r2bc": -2.18,
+    #     "maddpg": "results/maddpg_gt_sparse_final",
+    #     "ibmarl": "results/ibmarl_navigation_sparse",
+    # },
+    # "buzz_wire": {
+    #     "maddpg": "results/new_initial_tests/buzz_wire",
+    # },
+    # "transport": {
+    #     "maddpg": "results/new_initial_tests/transport",
+    # },
 }
 
 
@@ -104,8 +125,9 @@ def main() -> None:
                 if not value:
                     continue
                 try:
-                    iterations, mean, stderr = load_metrics_for_method(value)
-                    print("Plotting", method_name, "for", env_name, "with", len(mean), "datapoints")
+                    metric = "rl_only_episode_reward_mean" if method_name[:6] == "ibmarl" else "episode_reward_mean"
+                    iterations, mean, stderr = load_metrics_for_method(value, metric=metric)
+                    print("Plotting", method_name, "for", env_name, "with", len(mean), "datapoints", "using metric", metric)
                     ax.plot(iterations, mean, label=method_name)
                     ax.fill_between(
                         iterations,

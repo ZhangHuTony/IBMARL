@@ -68,7 +68,7 @@ def _load_demonstrations(demonstration_path, group, replay_buffer):
     of the live collector.
     """
     if not demonstration_path or not Path(demonstration_path).exists():
-        return
+        raise Exception("Demonstrations not found at {demonstration_path}")
 
     print(f"Loading demonstrations for group '{group}' from {demonstration_path}")
     try:
@@ -127,7 +127,7 @@ def _load_demonstrations(demonstration_path, group, replay_buffer):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"Warning: Failed to load demonstrations for group {group}: {e}")
+        raise Exception("Failed to load demonstrations for group {group}: {e}")
 
 def process_batch(env, batch: TensorDictBase) -> TensorDictBase:
     """

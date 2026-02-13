@@ -3,6 +3,7 @@ Registry for custom environment transforms.
 '''
 
 from src.environment.transforms.navigation_sparse import NavigationSparseReward
+from src.environment.transforms.balance_sparse import BalanceSparseReward
 
 def build_transforms(config: dict):
     """
@@ -22,6 +23,14 @@ def build_transforms(config: dict):
                 success_threshold=config.get("gt_radius"),
                 # Ensure this matches your VMAS scenario observation layout
                 rel_goal_slice=slice(4, 6), 
+            )
+        )
+    elif scenario == "balance" and sparse_rewards:
+        transform_repr.append("BalanceSparseReward")
+        transforms.append(
+            BalanceSparseReward(
+                group="agents",
+                success_threshold=config.get("gt_radius"),
             )
         )
     print("Transformations added to environment:", transform_repr) 
