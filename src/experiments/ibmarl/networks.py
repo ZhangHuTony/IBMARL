@@ -126,23 +126,7 @@ def build_rl_policies(cfg, env, device):
 
         policies[group] = policy
     
-    #exploration policies
-    exploration_policies = {}
-    for group, _agents in env.group_map.items():
-        exploration_policy = TensorDictSequential(
-            policies[group],
-            AdditiveGaussianModule(
-                spec = policies[group].spec,
-                annealing_num_steps= cfg.get('total_frames') // 2, # type: ignore
-                action_key= (group, "action"),
-                sigma_init = 0.1,
-                sigma_end = 0.1,
-            )
-            
-        )
-        exploration_policies[group] = exploration_policy
-    
-    return policies, exploration_policies
+    return policies
 
 
 def build_critics(cfg, env, device):

@@ -7,26 +7,49 @@ from torchrl.collectors import SyncDataCollector
 from torchrl.data import LazyMemmapStorage, RandomSampler, ReplayBuffer
 
 
-from src.experiments.ibmarl.modules import OverWriteActionWithBestComb
+from src.experiments.ibmarl.modules import OverWriteActionWithBestComb, build_exploration_policy_with_noise
 
 from pathlib import Path
 import torch
 import numpy as np
 
 
-def _build_exploration_policy(parent, group, exploration_policies):
+def _build_exploration_policy(parent, group, rl_policies, cfg, noise_modules_dict):
+    """
+    Build exploration policy for a group: clean RL policy -> noise -> arbiter.
+    The noise module respects ExplorationType (no noise in MODE, noise in RANDOM).
+    
+    Args:
+        noise_modules_dict: Dictionary to store noise module references for annealing
+    """
+    # Build policy with noise wrapper (noise respects ExplorationType)
+    exploration_policy_with_noise = build_exploration_policy_with_noise(
+        rl_policies[group],
+        rl_policies[group].spec,
+        cfg,
+        group
+    )
+    
+    # Store reference to noise module for annealing (it's the second module in the sequential)
+    noise_modules_dict[group] = exploration_policy_with_noise[1]
+    
+    # Add arbiter on top
     return TensorDictSequential(
-        exploration_policies[group],
-        OverWriteActionWithBestComb(parent ,group)
+        exploration_policy_with_noise,
+        OverWriteActionWithBestComb(parent, group)
     )
 
-def build_data_collector(cfg, parent, rl_noise_policies, env, device):
+def build_data_collector(cfg, parent, rl_policies, env, device):
 
     frames_per_batch = cfg.get('frames_per_batch')
     total_frames = cfg.get('total_frames')
     
+    # Dictionary to store noise module references for annealing
+    noise_modules = {}
+    
+    # Build exploration policies: clean RL -> noise (respects ExplorationType) -> arbiter
     exploration_policies = TensorDictSequential(
-        *[_build_exploration_policy(parent, group, rl_noise_policies) for group in env.group_map.keys()]
+        *[_build_exploration_policy(parent, group, rl_policies, cfg, noise_modules) for group in env.group_map.keys()]
     )
 
     collector = SyncDataCollector(
@@ -37,7 +60,7 @@ def build_data_collector(cfg, parent, rl_noise_policies, env, device):
         total_frames=total_frames
     )
 
-    return exploration_policies, collector
+    return exploration_policies, collector, noise_modules
 
 def build_replay_buffer(cfg, env, device):
     demonstration_path = cfg.get('demonstrations_path')

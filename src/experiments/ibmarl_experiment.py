@@ -33,7 +33,7 @@ class IbmarlExperiment(BaseMARLExperiment):
         bc_path = Path(config["r2bc_checkpoint_path"])
         self.il_policies = R2bcPolicy(bc_path, self.env, self.device)
 
-        self.rl_policies, self.rl_noise_policies = build_rl_policies(config, self.env, self.device)
+        self.rl_policies = build_rl_policies(config, self.env, self.device)
 
         self.critics = build_critics(config, self.env, self.device)
 
@@ -42,7 +42,7 @@ class IbmarlExperiment(BaseMARLExperiment):
 
         self.action_arbiter = ActionArbiter(config, self.il_policies, self.rl_policies, self.target_policies, self.critics, self.target_critics, self.env, self.device)
 
-        self.agents_exploration_policy, self.collector = build_data_collector(config, self, self.rl_noise_policies, self.env, self.device)
+        self.agents_exploration_policy, self.collector, self.noise_modules = build_data_collector(config, self, self.rl_policies, self.env, self.device)
 
         self.replay_buffers = build_replay_buffer(config, self.env, self.device)
 
@@ -91,6 +91,9 @@ class IbmarlExperiment(BaseMARLExperiment):
         episode_reward_mean_map = {group: [] for group in self.env.group_map.keys()}
         rl_action_fraction_map = {group: [] for group in self.env.group_map.keys()}
         rl_only_episode_reward_mean_map = {group: [] for group in self.env.group_map.keys()}
+        mean_action_diff_map = {group: [] for group in self.env.group_map.keys()}
+        mean_q_diff_map = {group: [] for group in self.env.group_map.keys()}
+        var_q_diff_map = {group: [] for group in self.env.group_map.keys()}
         train_group_map = copy.deepcopy(self.env.group_map)
 
         for iteration, batch in enumerate(self.collector):
@@ -104,6 +107,29 @@ class IbmarlExperiment(BaseMARLExperiment):
                     rl_action_fraction_map[group].append(frac)
                 else:
                     print(f"Warning: No arbiter choice found for {group}")
+                
+                # Retrieve metrics saved in modules.py
+                mean_action_diff = batch.get((group, "mean_action_diff"))
+                mean_q_diff = batch.get((group, "mean_q_diff"))
+                var_q_diff = batch.get((group, "var_q_diff"))
+                
+                if mean_action_diff is not None:
+                    # Extract scalar from batched tensor (all values are the same)
+                    mean_action_diff_map[group].append(mean_action_diff.mean().item())
+                else:
+                    mean_action_diff_map[group].append(0.0)
+                
+                if mean_q_diff is not None:
+                    # Extract scalar from batched tensor (all values are the same)
+                    mean_q_diff_map[group].append(mean_q_diff.mean().item())
+                else:
+                    mean_q_diff_map[group].append(0.0)
+                
+                if var_q_diff is not None:
+                    # Extract scalar from batched tensor (all values are the same)
+                    var_q_diff_map[group].append(var_q_diff.mean().item())
+                else:
+                    var_q_diff_map[group].append(0.0)
                     
             current_frames = batch.numel()
             batch = process_batch(self.env, batch)
@@ -143,13 +169,12 @@ class IbmarlExperiment(BaseMARLExperiment):
                     self.trainer.update_actor(group, minibatch) #TODO: save returns
                     self.trainer.polyak_step(self.rl_policies[group], self.target_policies[group])
 
-
-                    # Annealing update for exploration noise
-                self.rl_noise_policies[group][-1].step(current_frames)
+                # Annealing update for exploration noise
+                self.noise_modules[group].step(current_frames)
 
             # On occasion, evaluate ONLY THE RL part of the IBMARL policy on 10 episodes in the environment.
             if iteration % 1 == 0:
-                rl_only_means = self.evaluate_rl_only(n_episodes=10)
+                rl_only_means = self.evaluate_rl_only(n_episodes=20)
                 for group in self.env.group_map.keys():
                     rl_only_episode_reward_mean_map[group].append(rl_only_means[group])
             else:
@@ -183,6 +208,9 @@ class IbmarlExperiment(BaseMARLExperiment):
         self.results["episode_reward_mean_map"] = episode_reward_mean_map
         self.results["rl_action_fraction"] = rl_action_fraction_map
         self.results["rl_only_episode_reward_mean_map"] = rl_only_episode_reward_mean_map
+        self.results["mean_action_diff"] = mean_action_diff_map
+        self.results["mean_q_diff"] = mean_q_diff_map
+        self.results["var_q_diff"] = var_q_diff_map
 
         return f"IBMARL training complete. Environment: {self.config['scenario_name']}, Experiment Type: {self.experiment_type}, Seed: {self.seed}.\n\nResults: {self.results['rl_only_episode_reward_mean_map']['agents'][-10:]}"
 

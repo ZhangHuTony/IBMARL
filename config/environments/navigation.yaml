@@ -6,3 +6,4 @@ extends: "../base.yaml"
 # Environment specific parameters
 n_agents: 3
 gt_radius: 0.4
+horizon: 100

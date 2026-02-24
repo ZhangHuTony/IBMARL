@@ -15,17 +15,34 @@ CONFIG: dict[str, dict[str, str | float]] = {
     
     # DENSE REWARDS
     "navigation_dense": {
-        # "r2bc": -2.18,
-        "maddpg": "results/maddpg_gt_dense_final",
-        "ibmarl (no replay init)": "results/ibmarl_navigation_dense",
-        "ibmarl": "results/ibmarl_navigation_dense_w_replay",
+        "maddpg": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rl",
+        "rlfd": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rlfd",
+        "rft": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rft",
+        "ibmarl": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/ibmarl",
     },
+    "navigation_sparse": {
+        "maddpg": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison_sparse/rl",
+        "rlfd": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison_sparse/rlfd",
+        "rft": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison_sparse/rft",
+        "ibmarl": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison_sparse/ibmarl",
+    },
+    # "navigation_dense": {
+    #     # "r2bc": -2.18,
+    #     "maddpg": "results/maddpg_gt_dense_final",
+    #     # "ibmarl (no replay init)": "results/ibmarl_navigation_dense",
+    #     # "ibmarl": "results/ibmarl_navigation_dense_w_replay",
+    #     # "ibmarl (new results)": "results/temp",
+    #     "ibmarl (n=0.05)": "results/ibmarl_005",
+    #     "ibmarl (n=0.10)": "results/ibmarl_010",
+    #     "ibmarl (n=0.20)": "results/ibmarl_020",
+    #     # "ibmarl (n=0.30)": "results/ibmarl_030",
+    # },
 
-    "balance_dense": {
-        # "r2bc": -2.18,
-        "maddpg": "results/maddpg_balance_dense",
-        "ibmarl": "results/ibmarl_balance_dense",
-    },
+    # "balance_dense": {
+    #     # "r2bc": -2.18,
+    #     "maddpg": "results/maddpg_balance_dense",
+    #     "ibmarl": "results/ibmarl_balance_dense",
+    # },
     # "buzz_wire_dense": {
     #     # "r2bc": -2.18,
     #     "maddpg": "results/maddpg_buzzwire_dense",

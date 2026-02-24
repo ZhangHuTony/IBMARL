@@ -6,7 +6,6 @@ frames_per_batch: 1000 #number of team frames collected per sampling iteration
 n_iters: 250 #number of sampling and training iterations
 # n_iters: 150
 memory_size: 1000000 # replay buffer of each group can store this many frames
-horizon: 300
 sparse_rewards: False #whether to use sparse rewards
 
 #Training Hyperparameters

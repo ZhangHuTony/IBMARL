@@ -148,8 +148,32 @@ class ActionArbiter:
         perm_map = torch.tensor(choices, dtype=torch.float32, device=obs.device) # [K, N]
         mask = perm_map[best_k] # [B, N]
 
+        # Compute metrics for logging
+        # 1. Mean difference between a_RL and a_IL actions
+        action_diff = (a_rl - a_il).abs()  # [B, N, act_dim]
+        mean_action_diff = action_diff.mean().item()
 
-        return a_exec, mask
+        # 2. Mean and variance of q-value difference between a_RL and a_IL
+        # Evaluate q-values for pure RL and pure IL actions
+        # Find indices for all-RL (all 1s) and all-IL (all 0s) permutations
+        all_rl_idx = choices.index(tuple([1] * N))
+        all_il_idx = choices.index(tuple([0] * N))
+        
+        # Get q-values for all-RL and all-IL actions
+        q_rl = q_min_per_agent[all_rl_idx].sum(dim=2).squeeze(-1)  # [B]
+        q_il = q_min_per_agent[all_il_idx].sum(dim=2).squeeze(-1)  # [B]
+        
+        q_diff = q_rl - q_il  # [B]
+        mean_q_diff = q_diff.mean().item()
+        var_q_diff = q_diff.var().item()
+
+        metrics = {
+            'mean_action_diff': mean_action_diff,
+            'mean_q_diff': mean_q_diff,
+            'var_q_diff': var_q_diff,
+        }
+
+        return a_exec, mask, metrics
     
     def _best_next_act_comb(self, group, next_obs):
         '''
@@ -294,7 +318,27 @@ class ActionArbiter:
         # Create mask: 0 if IL was chosen, 1 if RL was chosen
         mask = best_k.view(-1, 1).expand(-1, N).float()
 
-        return a_exec, mask
+        # Compute metrics for logging
+        # 1. Mean difference between a_RL and a_IL actions
+        action_diff = (a_rl - a_il).abs()  # [B, N, act_dim]
+        mean_action_diff = action_diff.mean().item()
+
+        # 2. Mean and variance of q-value difference between a_RL and a_IL
+        # q_tot[0] is all-IL, q_tot[1] is all-RL
+        q_il = q_tot[0]  # [B]
+        q_rl = q_tot[1]  # [B]
+        
+        q_diff = q_rl - q_il  # [B]
+        mean_q_diff = q_diff.mean().item()
+        var_q_diff = q_diff.var().item()
+
+        metrics = {
+            'mean_action_diff': mean_action_diff,
+            'mean_q_diff': mean_q_diff,
+            'var_q_diff': var_q_diff,
+        }
+
+        return a_exec, mask, metrics
     
     def _best_next_act_strict(self, group, next_obs):
         '''

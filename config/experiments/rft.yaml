@@ -1,0 +1,23 @@
+# RFT experiment-specific configuration
+# Same as MADDPG except that the actor loss includes an additional
+# behaviour-cloning (BC) regularizer, alpha * lambda(t) * L_BC, where
+# lambda(t) linearly anneals to zero after a fixed number of iterations.
+
+extends: "../base.yaml"
+
+# Path to demonstrations file used ONLY for the BC loss
+demonstrations_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/demonstrations.pt"
+
+rft:
+  # Alpha in alpha * lambda(t) * L_BC
+  bc_alpha: 0.1
+
+  # Number of training iterations over which lambda(t) linearly
+  # anneals from 1.0 to 0.0. After this many iterations, the
+  # BC regularizer is effectively turned off.
+  bc_anneal_n_iters: 150
+
+  # Optional separate batch size for BC updates; if omitted, falls back
+  # to training.train_batch_size.
+  # bc_batch_size: 1024
+

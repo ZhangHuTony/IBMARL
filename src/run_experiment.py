@@ -147,12 +147,28 @@ if __name__ == "__main__":
 
     #Required arguments
     parser.add_argument("scenario_name", type=str, help="Name of the VMAS scenario to run")
-    parser.add_argument("exp_type", type=str, help= "ID for experiment")
+    parser.add_argument("exp_type", type=str, help="ID for experiment (e.g. 'ibmarl', 'maddpg')")
 
 
     #Optional Arguments (can override YAML)
     parser.add_argument("--render", action="store_true", help="Enable rendering")
     parser.add_argument("--seed", type=int, help="Seed for the experiment")
+    parser.add_argument(
+        "--sigma_init",
+        type=float,
+        help=(
+            "Initial Gaussian exploration noise stddev for IBMARL "
+            "(overrides config.exploration_noise.sigma_init; only valid for exp_type='ibmarl')"
+        ),
+    )
+    parser.add_argument(
+        "--sigma_end",
+        type=float,
+        help=(
+            "Final Gaussian exploration noise stddev for IBMARL "
+            "(overrides config.exploration_noise.sigma_end; only valid for exp_type='ibmarl')"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -162,6 +178,21 @@ if __name__ == "__main__":
     cfg["render"] = bool(args.render)
     if args.seed is not None:
         cfg["seed"] = args.seed
+
+    # CLI overrides for IBMARL exploration noise
+    if args.sigma_init is not None or args.sigma_end is not None:
+        if cfg.get("exp_type") != "ibmarl":
+            raise ValueError(
+                "Command-line arguments --sigma_init/--sigma_end are only valid when exp_type='ibmarl'. "
+                f"Got exp_type='{cfg.get('exp_type')}'."
+            )
+        # Ensure exploration_noise section exists
+        if "exploration_noise" not in cfg or cfg["exploration_noise"] is None:
+            cfg["exploration_noise"] = {}
+        if args.sigma_init is not None:
+            cfg["exploration_noise"]["sigma_init"] = float(args.sigma_init)
+        if args.sigma_end is not None:
+            cfg["exploration_noise"]["sigma_end"] = float(args.sigma_end)
 
     cfg = create_run_dirs(cfg)
 

@@ -1,0 +1,8 @@
+# RLfD experiment-specific configuration
+# Same as MADDPG except replay sampling: demo buffer + online buffer with
+# linear annealing of demo fraction (50% -> 0% over n_iters).
+
+extends: "../base.yaml"
+
+# Path to demonstrations file (loaded into demo replay buffer at startup)
+demonstrations_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/demonstrations.pt"

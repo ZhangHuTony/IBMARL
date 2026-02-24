@@ -24,15 +24,20 @@ extends: "../base.yaml"
 # r2bc_checkpoint_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/policy_checkpoint.pth" #24 demonstrations .4 radius
 # demonstrations_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/demonstrations.pt"
 
-# r2bc_checkpoint_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/policy_checkpoint.pth" #24 demonstrations .4 radius
-# demonstrations_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/demonstrations.pt"
+r2bc_checkpoint_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/policy_checkpoint.pth" #24 demonstrations .4 radius
+demonstrations_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/demonstrations.pt"
 
-r2bc_checkpoint_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_balance_decent_r2bc/policy_checkpoint.pth" #24 demonstrations .4 radius
-demonstrations_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_balance_decent_r2bc/demonstrations.pt"
+# r2bc_checkpoint_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_balance_decent_r2bc/policy_checkpoint.pth" #24 demonstrations .4 radius
+# demonstrations_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_balance_decent_r2bc/demonstrations.pt"
 
-strict : False #choose best combinatoion of policies or better policy actions
+strict : True #choose best combinatoion of policies or better policy actions
 
 soft : True
 temperature: 0.05
 
 num_critics : 3
+
+# Exploration noise parameters
+exploration_noise:
+  sigma_init: 0.00  # Initial Gaussian noise standard deviation for exploration
+  sigma_end: 0.00   # Final Gaussian noise standard deviation (after annealing)

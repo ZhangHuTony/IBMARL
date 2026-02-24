@@ -27,6 +27,9 @@ class BaseMARLExperiment:
         "episode_reward_mean_map", 
        "rl_action_fraction",
        "rl_only_episode_reward_mean_map",
+       "mean_action_diff",
+       "mean_q_diff",
+       "var_q_diff",
     )
 
     def __init__(self, config):
@@ -43,7 +46,8 @@ class BaseMARLExperiment:
 
         if self.experiment_type == "ibmarl":
             self.RESULT_KEYS = self.IBMARL_RESULTS_KEY
-        elif self.experiment_type == "maddpg":
+        elif self.experiment_type in ("maddpg", "rlfd", "rft"):
+            # RLfD and RFT share the same result structure as MADDPG for now
             self.RESULT_KEYS = self.MADDPG_RESULT_KEYS
         else:
             RuntimeError(f"Experiment Type: {self.experiment_type} not supported")
@@ -101,6 +105,9 @@ class BaseMARLExperiment:
         if self.experiment_type == 'ibmarl':
             fraction_map = self.results.get("rl_action_fraction", {})
             rl_only_mean_map = self.results.get("rl_only_episode_reward_mean_map", {})
+            mean_action_diff_map = self.results.get("mean_action_diff", {})
+            mean_q_diff_map = self.results.get("mean_q_diff", {})
+            var_q_diff_map = self.results.get("var_q_diff", {})
 
         # Defensive checks
         if not isinstance(mean_map, dict):
@@ -121,6 +128,9 @@ class BaseMARLExperiment:
                     "episode_reward_mean",
                     "rl_action_fraction",
                     "rl_only_episode_reward_mean",
+                    "mean_action_diff",
+                    "mean_q_diff",
+                    "var_q_diff",
                 ])
             else: 
                 writer.writerow([
@@ -140,7 +150,12 @@ class BaseMARLExperiment:
                 if self.experiment_type == 'ibmarl':
                     fractions = fraction_map.get(group, [0.0] * len(rewards))
                     rl_only_list = rl_only_mean_map.get(group, [None] * len(rewards))
-                    for iteration, (reward, fraction, rl_only) in enumerate(zip(rewards, fractions, rl_only_list)):
+                    mean_action_diff_list = mean_action_diff_map.get(group, [0.0] * len(rewards))
+                    mean_q_diff_list = mean_q_diff_map.get(group, [0.0] * len(rewards))
+                    var_q_diff_list = var_q_diff_map.get(group, [0.0] * len(rewards))
+                    for iteration, (reward, fraction, rl_only, action_diff, q_diff_mean, q_diff_var) in enumerate(
+                        zip(rewards, fractions, rl_only_list, mean_action_diff_list, mean_q_diff_list, var_q_diff_list)
+                    ):
                         rl_only_val = "" if rl_only is None else float(rl_only)
                         writer.writerow([
                             iteration,
@@ -148,6 +163,9 @@ class BaseMARLExperiment:
                             float(reward),
                             float(fraction),
                             rl_only_val,
+                            float(action_diff),
+                            float(q_diff_mean),
+                            float(q_diff_var),
                         ])
                 else: 
                    for iteration, (reward) in enumerate(rewards):
@@ -186,7 +204,7 @@ class BaseMARLExperiment:
             axs[i, 0].set_title(f"{group}: Combined IL/RL" if self.experiment_type == "ibmarl" else group)
             axs[i, 0].legend()
             axs[i, 0].grid(True, alpha=0.3)
-
+        
             if self.experiment_type == "ibmarl":
                 rl_only_map = self.results.get("rl_only_episode_reward_mean_map", {})
                 rl_only_list = rl_only_map.get(group, [])
