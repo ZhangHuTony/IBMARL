@@ -9,6 +9,29 @@ from torchrl.modules import AdditiveGaussianModule
 from tensordict.nn import TensorDictSequential
 
 
+def build_il_noise_modules(cfg, env, device):
+    """
+    Build AdditiveGaussianModule per group for IL policy exploration.
+    Uses same sigma/annealing as RL exploration noise (exploration_noise config).
+    """
+    noise_config = cfg.get("exploration_noise", {})
+    sigma_init = noise_config.get("sigma_init", 0.1)
+    sigma_end = noise_config.get("sigma_end", 0.1)
+
+    il_noise_modules = {}
+    for group, _ in env.group_map.items():
+        spec = env.full_action_spec_unbatched[group, "action"].to(device)
+        module = AdditiveGaussianModule(
+            spec=spec,
+            annealing_num_steps=cfg.get("total_frames") // 2,
+            action_key=(group, "action"),
+            sigma_init=sigma_init,
+            sigma_end=sigma_end,
+        )
+        il_noise_modules[group] = module
+    return il_noise_modules
+
+
 class OverWriteActionWithBestComb(torch.nn.Module):
     def __init__(self, parent, group:str):
         super().__init__()

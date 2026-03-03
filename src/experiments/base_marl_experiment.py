@@ -3,223 +3,101 @@ Base class for multi-agent reinforcement learning experiments.
 """
 
 import torch
-from torch import multiprocessing
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 import numpy as np
 
 from src.environment.make_env import make_env
+from src.util.metrics_logger import MetricsLogger
 
 from pathlib import Path
-import csv
 import matplotlib
-matplotlib.use("Agg")  # Non-interactive backend for saving plots
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
 class BaseMARLExperiment:
-    MADDPG_RESULT_KEYS = (
-        "group_map_keys", 
-        "episode_reward_mean_map", 
-        )
-    
-    IBMARL_RESULTS_KEY = (
-         "group_map_keys", 
-        "episode_reward_mean_map", 
-       "rl_action_fraction",
-       "rl_only_episode_reward_mean_map",
-       "mean_action_diff",
-       "mean_q_diff",
-       "var_q_diff",
-    )
 
     def __init__(self, config):
-
         self.config = config
-        #device setup
         self.device = self._setup_device()
-        self._setup_seed() # Experiment Reproducibility
-        
+        self._setup_seed()
+
         self.env = make_env(config, self.device)
         self.render_path = config['videos_dir']
-
         self.experiment_type = config['exp_type']
 
-        if self.experiment_type == "ibmarl":
-            self.RESULT_KEYS = self.IBMARL_RESULTS_KEY
-        elif self.experiment_type in ("maddpg", "rlfd", "rft"):
-            # RLfD and RFT share the same result structure as MADDPG for now
-            self.RESULT_KEYS = self.MADDPG_RESULT_KEYS
-        else:
-            RuntimeError(f"Experiment Type: {self.experiment_type} not supported")
-
-        self.results = self._initialize_results()
-
-
-
+        data_dir = Path(config["data_dir"])
+        self.metrics_logger = MetricsLogger(data_dir / "metrics.csv")
 
     def _setup_device(self):
-        # setup device (CPU/GPU) 
-        # is_fork = multiprocessing.get_start_method() == 'fork'
-        device =(
+        device = (
             torch.device(0)
             if torch.cuda.is_available()
             else torch.device("cpu")
         )
-
         return device
-    
 
     def _setup_seed(self):
-        self.seed = self.config.get('seed', None) 
+        self.seed = self.config.get('seed', None)
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.seed)
         print(f"Setting seed to: {self.config.get('seed', None)}")
 
-
-    def _initialize_results(self):
-        results = {k: None for k in self.RESULT_KEYS}
-        return results
-    
-    def _validate_results_complete(self):
-        missing = [k for k in self.RESULT_KEYS if self.results.get(k) is None]
-        if missing:
-            raise RuntimeError(
-                f"{self.__class__.__name__}: results incomplete: {missing}. "
-            )
-    
     def save_results(self):
-        '''
-        Takes results and saves them to needed files
-
-        NEEDS TO BE REFACTORED BETTER THAN JUST IF STATMENTS
-        '''
-        self._validate_results_complete()
-
-        data_dir = Path(self.config["data_dir"])
-        metrics_path = data_dir / "metrics.csv"
-
-        mean_map = self.results["episode_reward_mean_map"]
-
-        if self.experiment_type == 'ibmarl':
-            fraction_map = self.results.get("rl_action_fraction", {})
-            rl_only_mean_map = self.results.get("rl_only_episode_reward_mean_map", {})
-            mean_action_diff_map = self.results.get("mean_action_diff", {})
-            mean_q_diff_map = self.results.get("mean_q_diff", {})
-            var_q_diff_map = self.results.get("var_q_diff", {})
-
-        # Defensive checks
-        if not isinstance(mean_map, dict):
-            raise TypeError(
-                "episode_reward_mean_map must be a dict of "
-                "{group_name: list_of_rewards}"
-            )
-
-        # Write CSV
-        with open(metrics_path, mode="w", newline="") as f:
-            writer = csv.writer(f)
-
-            # Header
-            if self.experiment_type == 'ibmarl':
-                writer.writerow([
-                    "iteration",
-                    "group",
-                    "episode_reward_mean",
-                    "rl_action_fraction",
-                    "rl_only_episode_reward_mean",
-                    "mean_action_diff",
-                    "mean_q_diff",
-                    "var_q_diff",
-                ])
-            else: 
-                writer.writerow([
-                    "iteration",
-                    "group",
-                    "episode_reward_mean",
-                ])
-
-            # Rows
-            for group, rewards in mean_map.items():
-                
-                if not isinstance(rewards, (list, tuple)):
-                    raise TypeError(
-                        f"Rewards for group '{group}' must be a list or tuple."
-                    )
-                
-                if self.experiment_type == 'ibmarl':
-                    fractions = fraction_map.get(group, [0.0] * len(rewards))
-                    rl_only_list = rl_only_mean_map.get(group, [None] * len(rewards))
-                    mean_action_diff_list = mean_action_diff_map.get(group, [0.0] * len(rewards))
-                    mean_q_diff_list = mean_q_diff_map.get(group, [0.0] * len(rewards))
-                    var_q_diff_list = var_q_diff_map.get(group, [0.0] * len(rewards))
-                    for iteration, (reward, fraction, rl_only, action_diff, q_diff_mean, q_diff_var) in enumerate(
-                        zip(rewards, fractions, rl_only_list, mean_action_diff_list, mean_q_diff_list, var_q_diff_list)
-                    ):
-                        rl_only_val = "" if rl_only is None else float(rl_only)
-                        writer.writerow([
-                            iteration,
-                            group,
-                            float(reward),
-                            float(fraction),
-                            rl_only_val,
-                            float(action_diff),
-                            float(q_diff_mean),
-                            float(q_diff_var),
-                        ])
-                else: 
-                   for iteration, (reward) in enumerate(rewards):
-                        writer.writerow([
-                            iteration,
-                            group,
-                            float(reward)
-                        ])
-
-        print(f"Saved metrics to: {metrics_path.resolve()}")
-
-        # Save policy checkpoints to checkpoints subdir
+        self.metrics_logger.save()
+        print(f"Saved metrics to: {self.metrics_logger.path.resolve()}")
         self.save_checkpoint()
+        self._save_rewards_plot()
 
-        # Generate plot of episode_reward_mean_map over time
-        self._save_rewards_plot(data_dir)
-
-    def _save_rewards_plot(self, data_dir: Path):
-        """
-        Generate and save a plot of episode_reward_mean_map over time.
-        For IBMARL experiments, also includes rl_only_episode_reward_mean_map.
-        """
+    def _save_rewards_plot(self):
+        data_dir = Path(self.config["data_dir"])
         plots_dir = Path(self.config.get("plots_dir", data_dir.parent / "plots"))
         plots_dir.mkdir(parents=True, exist_ok=True)
 
-        mean_map = self.results["episode_reward_mean_map"]
-        groups = list(mean_map.keys())
+        groups = list(self.env.group_map.keys())
+        has_rl_only = "rl_only_episode_reward_mean" in self.metrics_logger.columns
 
-        n_plots = 2 if self.experiment_type == "ibmarl" else 1
-        fig, axs = plt.subplots(len(groups), n_plots, figsize=(6 * n_plots, 4 * len(groups)), squeeze=False)
+        n_plots = 2 if has_rl_only else 1
+        fig, axs = plt.subplots(
+            len(groups), n_plots,
+            figsize=(6 * n_plots, 4 * len(groups)),
+            squeeze=False,
+        )
 
         for i, group in enumerate(groups):
-            iterations = list(range(len(mean_map[group])))
-            axs[i, 0].plot(iterations, mean_map[group], label=f"Episode reward mean ({group})")
+            iterations = self.metrics_logger.get_values("iteration", group=group)
+            rewards = self.metrics_logger.get_values("episode_reward_mean", group=group)
+            axs[i, 0].plot(iterations, rewards, label=f"Episode reward mean ({group})")
             axs[i, 0].set_ylabel("Reward")
-            axs[i, 0].set_title(f"{group}: Combined IL/RL" if self.experiment_type == "ibmarl" else group)
+            axs[i, 0].set_title(f"{group}: Combined IL/RL" if has_rl_only else group)
             axs[i, 0].legend()
             axs[i, 0].grid(True, alpha=0.3)
-        
-            if self.experiment_type == "ibmarl":
-                rl_only_map = self.results.get("rl_only_episode_reward_mean_map", {})
-                rl_only_list = rl_only_map.get(group, [])
-                # Filter out None values for plotting
-                rl_only_valid = [(idx, v) for idx, v in enumerate(rl_only_list) if v is not None]
-                if rl_only_valid:
-                    idxs, vals = zip(*rl_only_valid)
-                    axs[i, 1].plot(idxs, vals, label=f"RL-only reward mean ({group})", color="orange")
+
+            if has_rl_only:
+                rl_only = self.metrics_logger.get_values(
+                    "rl_only_episode_reward_mean", group=group
+                )
+                valid = [
+                    (it, v)
+                    for it, v in zip(iterations, rl_only)
+                    if v is not None
+                ]
+                if valid:
+                    idxs, vals = zip(*valid)
+                    axs[i, 1].plot(
+                        idxs, vals,
+                        label=f"RL-only reward mean ({group})",
+                        color="orange",
+                    )
                 axs[i, 1].set_ylabel("Reward")
                 axs[i, 1].set_title(f"{group}: RL-only")
                 axs[i, 1].legend()
                 axs[i, 1].grid(True, alpha=0.3)
 
         axs[-1, 0].set_xlabel("Training iterations")
-        if self.experiment_type == "ibmarl":
+        if has_rl_only:
             axs[-1, 1].set_xlabel("Training iterations")
 
         plt.tight_layout()
@@ -229,10 +107,6 @@ class BaseMARLExperiment:
         print(f"Saved rewards plot to: {plot_path.resolve()}")
 
     def save_checkpoint(self):
-        """
-        Save policy checkpoints to the checkpoints subdir.
-        Subclasses should override if they use different policy attributes (e.g. rl_policies).
-        """
         policies = getattr(self, "rl_policies", None) or getattr(self, "policies", None)
         if policies is None:
             raise RuntimeError("No policies to save (expected self.policies or self.rl_policies)")
@@ -247,17 +121,7 @@ class BaseMARLExperiment:
 
     def render_policy(self):
         raise NotImplementedError
-    
+
     @abstractmethod
     def train(self) -> str:
         ...
-    
-
-
-
-   
-        
-        
-
-
-    

@@ -9,17 +9,19 @@ from tensordict import TensorDict
 class ActionArbiter:
     def __init__(
             self,
-            config, 
-            il_policy, 
-            rl_policy, target_rl_policy, 
-            critics, target_critics, 
-            env, device):
+            config,
+            il_policy,
+            rl_policy, target_rl_policy,
+            critics, target_critics,
+            env, device,
+            il_noise_modules=None):
         
         self.strict = config.get("strict")
         self.soft = config.get("soft")
         self.temperature = config.get("temperature")
 
         self.il_policy = il_policy
+        self.il_noise_modules = il_noise_modules or {}
         self.rl_policy = rl_policy
         self.target_rl_policies = target_rl_policy
         self.critics = critics
@@ -91,9 +93,16 @@ class ActionArbiter:
         _, _, act_dim = a_rl.shape
 
 
-        #compute il action candidates
+        # Compute IL action candidates and add exploration noise (same as RL)
         a_il = self.il_policy.get_action(group, obs)
-
+        if group in self.il_noise_modules:
+            td_il = TensorDict(
+                {(group, "action"): a_il},
+                batch_size=[B],
+                device=obs.device,
+            )
+            td_il = self.il_noise_modules[group](td_il)
+            a_il = td_il[(group, "action")]
 
         if a_il.shape != a_rl.shape:
             raise RuntimeError(f"a_il shape {list(a_il.shape)} != a_rl shape {list(a_rl.shape)}")
@@ -264,8 +273,16 @@ class ActionArbiter:
 
         B, N, _ = obs.shape
 
-        # IL candidate (must match RL shape)
+        # IL candidate (must match RL shape) + exploration noise (same as RL)
         a_il = self.il_policy.get_action(group, obs)
+        if group in self.il_noise_modules:
+            td_il = TensorDict(
+                {(group, "action"): a_il},
+                batch_size=[B],
+                device=obs.device,
+            )
+            td_il = self.il_noise_modules[group](td_il)
+            a_il = td_il[(group, "action")]
         if a_il.shape != a_rl.shape:
             raise RuntimeError(f"a_il shape {list(a_il.shape)} != a_rl shape {list(a_rl.shape)}")
 

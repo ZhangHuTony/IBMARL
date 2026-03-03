@@ -15,6 +15,7 @@ are identical to MADDPG.
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict
+import time
 
 import numpy as np
 import torch
@@ -151,10 +152,8 @@ class RlfdExperiment(MaddpgExperiment):
     """
 
     def __init__(self, config):
-        # MADDPG setup: policies, critics, collector, losses, target_updaters, optimisers
         super().__init__(config)
 
-        # Replace single replay buffer with demo + online; use online as self.replay_buffers for any shared code
         demo_buffers, online_buffers = _build_demo_and_online_buffers(
             config, self.env, self.device
         )
@@ -173,17 +172,23 @@ class RlfdExperiment(MaddpgExperiment):
             ),
         )
 
-        episode_reward_mean_map = {
-            group: [] for group in self.env.group_map.keys()
-        }
         train_group_map = deepcopy(self.env.group_map)
         n_iters = self.config.get("n_iters")
         total_iters = max(1, n_iters - 1)
         train_batch_size = self.config.get("training").get("train_batch_size")
 
+        start_time = time.time()
+        total_frames = 0
+        total_episodes = 0
+        total_train_steps = 0
+
         for iteration, batch in enumerate(self.collector):
             current_frames = batch.numel()
+            total_frames += current_frames
             batch = self.process_batch(batch)
+
+            actor_losses = {group: [] for group in self.env.group_map.keys()}
+            critic_losses = {group: [] for group in self.env.group_map.keys()}
 
             for group in train_group_map.keys():
                 group_batch = batch.exclude(
@@ -198,7 +203,6 @@ class RlfdExperiment(MaddpgExperiment):
 
                 self.replay_buffers[group].extend(group_batch)
 
-                # Linear annealing: 50% demo at start -> 0% at end
                 progress = min(1.0, float(iteration) / float(total_iters))
                 demo_frac = 0.5 * (1.0 - progress)
                 demo_batch_size = int(round(train_batch_size * demo_frac))
@@ -227,6 +231,9 @@ class RlfdExperiment(MaddpgExperiment):
 
                     loss_vals = self.losses[group](minibatch)
 
+                    actor_losses[group].append(loss_vals["loss_actor"].item())
+                    critic_losses[group].append(loss_vals["loss_value"].item())
+
                     for loss_name in ["loss_actor", "loss_value"]:
                         loss = loss_vals[loss_name]
                         optimiser = self.optimisers[group][loss_name]
@@ -240,23 +247,48 @@ class RlfdExperiment(MaddpgExperiment):
                         optimiser.zero_grad()
 
                     self.target_updaters[group].step()
+                    total_train_steps += 1
 
                 self.exploration_policies[group][-1].step(current_frames)
 
+            # --- Metrics ---
+            elapsed = time.time() - start_time
+            speed = total_frames / max(elapsed, 1e-6)
+
+            done_global = batch.get(("next", "done"))
+            episodes_this_iter = int(done_global.sum().item())
+            total_episodes += episodes_this_iter
+
             for group in self.env.group_map.keys():
-                episode_reward_mean = (
-                    batch.get(("next", group, "episode_reward"))[
-                        batch.get(("next", group, "done"))
-                    ]
-                    .mean()
-                    .item()
+                done = batch.get(("next", group, "done"))
+                ep_rewards = batch.get(("next", group, "episode_reward"))[done]
+                episode_reward_mean = ep_rewards.mean().item() if ep_rewards.numel() > 0 else 0.0
+
+                n_opt = max(len(actor_losses[group]), 1)
+
+                self.metrics_logger.log(
+                    iteration=iteration,
+                    group=group,
+                    elapsed_time=round(elapsed, 2),
+                    episode=total_episodes,
+                    step=total_frames,
+                    train_step=total_train_steps,
+                    speed_fps=round(speed, 2),
+                    episode_reward_mean=episode_reward_mean,
+                    actor_loss=round(sum(actor_losses[group]) / n_opt, 6),
+                    critic_loss=round(sum(critic_losses[group]) / n_opt, 6),
+                    replay_size=len(self.replay_buffers[group]),
+                    demo_fraction=round(demo_frac, 4),
                 )
-                episode_reward_mean_map[group].append(episode_reward_mean)
+
+            if iteration % 10 == 0:
+                self.metrics_logger.save()
 
             pbar.set_description(
                 ", ".join(
                     [
-                        f"episode_reward_mean_{group} = {episode_reward_mean_map[group][-1]}"
+                        f"episode_reward_mean_{group} = "
+                        f"{self.metrics_logger.get_values('episode_reward_mean', group)[-1]}"
                         for group in self.env.group_map.keys()
                     ]
                 ),
@@ -264,11 +296,12 @@ class RlfdExperiment(MaddpgExperiment):
             )
             pbar.update()
 
-        self.results["group_map_keys"] = self.env.group_map.keys()
-        self.results["episode_reward_mean_map"] = episode_reward_mean_map
+        self.metrics_logger.save()
 
+        first_group = list(self.env.group_map.keys())[0]
+        recent = self.metrics_logger.get_values("episode_reward_mean", first_group)[-10:]
         return (
             f"RLfD training complete. Environment: {self.config['scenario_name']}, "
             f"Experiment Type: {self.experiment_type}, Seed: {self.seed}.\n\n"
-            f"Results: {self.results['episode_reward_mean_map']['agents'][-10:]}"
+            f"Results: {recent}"
         )

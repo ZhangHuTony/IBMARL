@@ -4,8 +4,6 @@ handles losses and optimization
 import torch
 import torch.nn.functional as F
 
-import numpy as np
-
 from tensordict import TensorDict, TensorDictBase
 
 
@@ -38,34 +36,29 @@ class GroupTrainer:
 
 
 
-    def update_critic(self, group, minibatch) -> dict: 
-        '''
-        returns losses and stats
-        '''
+    def update_critic(self, group, minibatch) -> dict:
         loss_value = self._ibmarl_value_loss(group, minibatch)
+        critic_loss_val = loss_value.item()
 
-
-        # --- critic step ---
         opt_critic = self.optimisers[group]["loss_value"]
         opt_critic.zero_grad()
         loss_value.backward()
         torch.nn.utils.clip_grad_norm_(opt_critic.param_groups[0]["params"], self.max_grad_norm)
         opt_critic.step()
 
-        return None #TODO: have it return the losses
-    
+        return {"critic_loss": critic_loss_val}
+
     def update_actor(self, group, minibatch) -> dict:
         loss_actor = self._ibmarl_actor_loss(group, minibatch)
-        
-        # --- actor step ---
+        actor_loss_val = loss_actor.item()
+
         opt_actor = self.optimisers[group]["loss_actor"]
         opt_actor.zero_grad()
         loss_actor.backward()
         torch.nn.utils.clip_grad_norm_(opt_actor.param_groups[0]["params"], self.max_grad_norm)
         opt_actor.step()
 
-
-        return None #TODO: have it return the losses
+        return {"actor_loss": actor_loss_val}
     
     
     def polyak_step(self, source, target):
@@ -88,113 +81,82 @@ class GroupTrainer:
             p_targ.data.mul_(1.0 - self.tau).add_(self.tau * p.data)
     
     def _build_optimisers(self):
+        # Use only first critic for value loss (same learning as MADDPG/RLFD)
         optimisers = {}
         for group in self.env.group_map.keys():
-            critic_params = []
-            for critic in self.critics[group]:
-                critic_params.extend(list(critic.parameters()))
-            
-            optimisers[group]={
+            optimisers[group] = {
                 "loss_actor": torch.optim.Adam(
                     self.rl_policies[group].parameters(),
-                    lr = self.lr
+                    lr=self.lr,
                 ),
-                "loss_value" : torch.optim.Adam(
-                    critic_params,
-                    lr = self.lr
-                )
+                "loss_value": torch.optim.Adam(
+                    self.critics[group][0].parameters(),
+                    lr=self.lr,
+                ),
             }
         return optimisers
-    
-    def _sample_indices(self):
-        if self.num_critics <=2:
-            return list(range(self.num_critics))
-        return np.random.choice(self.num_critics, 2, replace = False)
 
 
-    def _ibmarl_value_loss(self, group:str, mb: TensorDictBase) -> torch.Tensor:
-        '''
-        returns loss using bootstrap proposal, maintaining per-agent separation
-        '''
+    def _ibmarl_value_loss(self, group: str, mb: TensorDictBase) -> torch.Tensor:
+        """
+        TD0 value loss with bootstrap proposal (IL vs RL) for next action.
+        Uses first critic only to match MADDPG/RLFD learning. Uses terminated
+        for bootstrap mask (no bootstrap on episode end), same as TorchRL convention.
+        """
+        obs = mb[(group, "observation")]
+        act = mb[(group, "action")]
+        rew = mb[("next", group, "reward")]
+        next_obs = mb[("next", group, "observation")]
 
-        obs     = mb[(group, "observation")]
-        act     = mb[(group, "action")]
-        rew     = mb[("next", group, "reward")]  # Shape: [B, N, 1]
-        done    = mb[("next", group, "done")]    # Shape: [B, N, 1] or [B, 1]
-        next_obs= mb[("next", group, "observation")]
+        # Use terminated for bootstrap mask (same as MADDPG/DDPGLoss)
+        terminated = mb.get(("next", group, "terminated"), mb.get(("next", group, "done")))
+        if terminated.dim() == 2:
+            terminated = terminated.unsqueeze(-1)
+        if terminated.shape[-2] != obs.shape[1]:
+            terminated = terminated.expand(terminated.shape[0], obs.shape[1], 1)
 
-        # target calculation
         with torch.no_grad():
-            # --------BOOTSTRAPPING PART------------------#
-            # a_next_star: [B, N, Act_Dim]
-            # q_next_val:  [B, N] (Minimized over 2 random critics, separate per agent)
-            a_next_star, q_next_val = self.action_arbiter.bootstrap_proposal(group, next_obs)
-
-           
-            # Do NOT sum rewards. We want specific targets for specific agents.
-            # Ensure shape is [B, N, 1]
-            if rew.dim() < 3:
-                 rew = rew.unsqueeze(-1)
-            
-            # Reshape q_next_val to match reward: [B, N] -> [B, N, 1]
+            _, q_next_val = self.action_arbiter.bootstrap_proposal(group, next_obs)
             q_target_val = q_next_val.unsqueeze(-1)
-            
-            # Handle Done Mask
-            # If done is shared ([B, 1]), broadcast it. 
-            # If done is per-agent ([B, N, 1]), keep it.
-            if done.dim() == 2: # [B, 1]
-                 done = done.unsqueeze(-1) # [B, 1, 1]
-            
-            # Bellman Equation per Agent
-            # Y shape: [B, N, 1]
-            y = rew + self.gamma * (1.0 - done.float()) * q_target_val
-        
 
-        total_loss = 0
-        td_cur = TensorDict({(group, "observation"): obs, (group, "action"): act}, batch_size=[obs.shape[0]], device = obs.device)
+            if rew.dim() < 3:
+                rew = rew.unsqueeze(-1)
 
-        for critic in self.critics[group]:
-            # q shape: [B, N, 1]
-            q = critic(td_cur)[(group, "state_action_value")]
-            
+            # TD0: y = r + gamma * (1 - terminated) * Q(s', a'_star)
+            y = rew + self.gamma * (1.0 - terminated.float()) * q_target_val
 
-            q_loss = F.mse_loss(q, y)
-            
-            total_loss += q_loss
-        
-        return total_loss
+        td_cur = TensorDict(
+            {(group, "observation"): obs, (group, "action"): act},
+            batch_size=[obs.shape[0]],
+            device=obs.device,
+        )
+        critic = self.critics[group][0]
+        q = critic(td_cur)[(group, "state_action_value")]
+        return F.mse_loss(q, y)
     
     def _ibmarl_actor_loss(self, group: str, mb: TensorDictBase) -> torch.Tensor:
         """
-        MADDPG-style actor loss:
-        L_actor = -E[ Q(obs, pi(obs)) ]
-
-        mb[(group,"observation")] is [B, N, obs_dim]
+        MADDPG-style actor loss (same as RLFD): L_actor = -E[ Q(obs, pi(obs)) ].
+        Uses first critic only to match MADDPG/RLFD.
         """
-        obs = mb[(group, "observation")]  # [B,N,obs_dim]
+        obs = mb[(group, "observation")]
         B = obs.shape[0]
 
-        # Compute actions from current policy (NO exploration noise in the loss)
-        td_pi = TensorDict({(group, "observation"): obs}, batch_size=[B], device=obs.device)
+        td_pi = TensorDict(
+            {(group, "observation"): obs}, batch_size=[B], device=obs.device
+        )
         td_pi = self.rl_policies[group](td_pi)
-        a_pi = td_pi[(group, "action")]  # [B,N,act_dim]
+        a_pi = td_pi[(group, "action")]
 
-        td_q = TensorDict({(group, "observation"): obs, (group, "action"): a_pi}, batch_size=[B], device=obs.device)
+        td_q = TensorDict(
+            {(group, "observation"): obs, (group, "action"): a_pi},
+            batch_size=[B],
+            device=obs.device,
+        )
+        q = self.critics[group][0](td_q)[(group, "state_action_value")]
 
-        q_list = []
-        for i in range(self.num_critics):
-            q = self.critics[group][i](td_q)[(group, "state_action_value")]
-            q_list.append(q)
-        
-        q_stack = torch.stack(q_list, dim=0)
-        q_min, _ = torch.min(q_stack, dim=0)
-
-        # Reduce to a scalar per batch element
-        if q_min.dim() == 3:
-            q_tot = q_min.sum(dim=1).squeeze(-1)   # [B]
-        elif q.dim() == 2:
-            q_tot = q_min.squeeze(-1)              # [B]
+        if q.dim() == 3:
+            q_tot = q.sum(dim=1).squeeze(-1)
         else:
-            raise RuntimeError(f"Unexpected critic output shape in actor loss: {list(q.shape)}")
-
+            q_tot = q.squeeze(-1)
         return -q_tot.mean()

@@ -3,6 +3,7 @@ from tensordict import TensorDictBase
 import torch
 import torch.nn as nn
 import copy
+import time
 from tqdm import tqdm
 
 from src.experiments.base_marl_experiment import BaseMARLExperiment
@@ -42,29 +43,12 @@ class MaddpgExperiment(BaseMARLExperiment):
         self.losses, self.target_updaters, self.optimisers = self._setup_loss_functions()
 
 
-
-
-
     def _setup_policy(self, cfg, env, device):
         print("Setting up Policies...")
 
         policy_modules = {}
 
         for group, agents in env.group_map.items():
-            obs_dim = env.observation_spec[group, "observation"].shape[-1]
-            act_dim = env.full_action_spec[group, "action"].shape[-1]
-            n_agents = len(agents)
-
-            # # Use the custom class that supports LayerNorm + Dropout + Independent Params
-            # policy_net = IndependentAgentPolicy(
-            #     n_agents=n_agents,
-            #     input_dim=obs_dim,
-            #     output_dim=act_dim,
-            #     hidden_dim=256,   # Adjusted for config size
-            #     depth=3,          # 
-            #     dropout=0.5       # CRITICAL: Paper uses 0.5 Actor Dropout [cite: 172]
-            # ).to(device)
-
             policy_net = MultiAgentMLP(
                 n_agent_inputs= env.observation_spec[group, "observation"].shape[-1],
                 n_agent_outputs= env.full_action_spec[group, "action"].shape[-1],
@@ -85,7 +69,6 @@ class MaddpgExperiment(BaseMARLExperiment):
 
             policy_modules[group] = policy_module
             
-        # Wrap in probability distribution (TanhDelta handles the final Tanh activation)
         policies = {}
 
         for group, _agents in env.group_map.items():
@@ -104,7 +87,6 @@ class MaddpgExperiment(BaseMARLExperiment):
 
             policies[group] = policy
         
-        # Exploration policies (Annealing Gaussian noise)
         exploration_policies = {}
         for group, _agents in env.group_map.items():
             exploration_policy = TensorDictSequential(
@@ -124,8 +106,8 @@ class MaddpgExperiment(BaseMARLExperiment):
     def _setup_critic(self):
         critics = {}
 
-        share_critic_params = False #each agent has its own critic (ADD THIS TO CONFIG LATER?)
-        centralized = True #MADDPG get priveleged information aka centralized critic (ADD THIS TO CONFIG LATER?)
+        share_critic_params = False
+        centralized = True
 
         print("Setting up MADDPG critic networks...")
         for group, agents in self.env.group_map.items():
@@ -170,12 +152,20 @@ class MaddpgExperiment(BaseMARLExperiment):
             ), 
         )
 
-        episode_reward_mean_map = {group: [] for group in self.env.group_map.keys()}
         train_group_map = copy.deepcopy(self.env.group_map)
+
+        start_time = time.time()
+        total_frames = 0
+        total_episodes = 0
+        total_train_steps = 0
 
         for iteration, batch in enumerate(self.collector):
             current_frames = batch.numel()
+            total_frames += current_frames
             batch = self.process_batch(batch)
+
+            actor_losses = {group: [] for group in self.env.group_map.keys()}
+            critic_losses = {group: [] for group in self.env.group_map.keys()}
 
             for group in train_group_map.keys():
                 group_batch = batch.exclude(
@@ -185,58 +175,69 @@ class MaddpgExperiment(BaseMARLExperiment):
                         if _group != group
                         for key in [_group, ("next", _group)]
                     ]
-                ) #exclude other groups' data
-                group_batch = group_batch.reshape(
-                    -1
-                ) 
+                )
+                group_batch = group_batch.reshape(-1)
                 self.replay_buffers[group].extend(group_batch)
 
                 for _ in range(self.config.get('training').get('n_optimiser_steps')):
                     minibatch = self.replay_buffers[group].sample()
 
-
                     loss_vals = self.losses[group](minibatch)
 
+                    actor_losses[group].append(loss_vals["loss_actor"].item())
+                    critic_losses[group].append(loss_vals["loss_value"].item())
+
                     for loss_name in ["loss_actor", "loss_value"]:
-                        
-
                         loss = loss_vals[loss_name]
-                        
                         optimiser = self.optimisers[group][loss_name]
-
                         loss.backward()
-
-                        #Optional for some reason
                         params = optimiser.param_groups[0]['params']
                         torch.nn.utils.clip_grad_norm_(params, self.config.get('training').get('max_grad_norm'))
-
                         optimiser.step()
                         optimiser.zero_grad()
 
                     self.target_updaters[group].step()
+                    total_train_steps += 1
 
-                    # Annealing update for exploration noise
                 self.exploration_policies[group][-1].step(current_frames)
-            
-            #if iteration == self.config.get("horizon"):
-              #  del train_group_map["agent"] #idk how deleting stops the training of that group but it does
 
-            # Logging
+            # --- Metrics ---
+            elapsed = time.time() - start_time
+            speed = total_frames / max(elapsed, 1e-6)
+
+            done_global = batch.get(("next", "done"))
+            episodes_this_iter = int(done_global.sum().item())
+            total_episodes += episodes_this_iter
+
             for group in self.env.group_map.keys():
-                episode_reward_mean = (
-                    batch.get(("next", group, "episode_reward"))[
-                        batch.get(("next", group, "done"))
-                    ]
-                    .mean()
-                    .item()
-                    )
-                
-                episode_reward_mean_map[group].append(episode_reward_mean)
+                done = batch.get(("next", group, "done"))
+                ep_rewards = batch.get(("next", group, "episode_reward"))[done]
+                episode_reward_mean = ep_rewards.mean().item() if ep_rewards.numel() > 0 else 0.0
+
+                n_opt = max(len(actor_losses[group]), 1)
+
+                self.metrics_logger.log(
+                    iteration=iteration,
+                    group=group,
+                    elapsed_time=round(elapsed, 2),
+                    episode=total_episodes,
+                    step=total_frames,
+                    train_step=total_train_steps,
+                    speed_fps=round(speed, 2),
+                    episode_reward_mean=episode_reward_mean,
+                    actor_loss=round(sum(actor_losses[group]) / n_opt, 6),
+                    critic_loss=round(sum(critic_losses[group]) / n_opt, 6),
+                    replay_size=len(self.replay_buffers[group]),
+                )
+
+            if iteration % 10 == 0:
+                self.metrics_logger.save()
 
             pbar.set_description(
                 ", ".join(
                     [
-                        f"episode_reward_mean_{group} = {episode_reward_mean_map[group][-1]}"
+                        f"episode_reward_mean_{group} = "
+                        f"{self.metrics_logger.get_values('episode_reward_mean', group)[-1]}"
                         for group in self.env.group_map.keys()
                     ]
                 ),
@@ -244,15 +245,18 @@ class MaddpgExperiment(BaseMARLExperiment):
             )
             pbar.update()
 
-        self.results["group_map_keys"] = self.env.group_map.keys()
-        self.results["episode_reward_mean_map"] = episode_reward_mean_map
+        self.metrics_logger.save()
 
-        return f"MADDPG training complete. Environment: {self.config['scenario_name']}, Experiment Type: {self.experiment_type}, Seed: {self.seed}.\n\nResults: {self.results['episode_reward_mean_map']['agents'][-10:]}"
+        first_group = list(self.env.group_map.keys())[0]
+        recent = self.metrics_logger.get_values("episode_reward_mean", first_group)[-10:]
+        return (
+            f"MADDPG training complete. Environment: {self.config['scenario_name']}, "
+            f"Experiment Type: {self.experiment_type}, Seed: {self.seed}.\n\n"
+            f"Results: {recent}"
+        )
 
 
     def _setup_data_collection(self):
-        # setup data collection logic here
-
         agents_exploration_policy = TensorDictSequential(*self.exploration_policies.values())
 
         collector = SyncDataCollector(
@@ -266,29 +270,27 @@ class MaddpgExperiment(BaseMARLExperiment):
         return agents_exploration_policy, collector
 
     def _setup_replay_buffer(self):
-        # setup replay buffer logic here
         replay_buffers = {}
         for group, _agents in self.env.group_map.items():
             replay_buffer = ReplayBuffer(
-                storage = LazyMemmapStorage(self.config.get('memory_size')), #must map to cpu
+                storage = LazyMemmapStorage(self.config.get('memory_size')),
                 sampler = RandomSampler(),
                 batch_size = self.config.get('training').get('train_batch_size'),
             )
 
-            if self.device.type != "cpu": #move to gpu if not training on cpu
+            if self.device.type != "cpu":
                 replay_buffer.append_transform(lambda td: td.to(self.device))
             replay_buffers[group] = replay_buffer
         return replay_buffers
     
     def _setup_loss_functions(self):
-        # setup loss functions here
         losses = {}
 
         for group, _agents in self.env.group_map.items():
             loss_module = DDPGLoss(
                 actor_network = self.policies[group],
                 value_network = self.critics[group],
-                delay_value = True, #use target networks
+                delay_value = True,
             )
             loss_module.set_keys(
                 state_action_value = (group, "state_action_value"),
@@ -348,7 +350,6 @@ class MaddpgExperiment(BaseMARLExperiment):
         try:
             results_dir = self.render_path
 
-
             video_logger = CSVLogger(
                 exp_name="vmas_logs",
                 log_dir=str(results_dir),
@@ -361,7 +362,7 @@ class MaddpgExperiment(BaseMARLExperiment):
             env_with_render = env_with_render.append_transform(
                 PixelRenderTransform(
                     out_keys=["pixels"],
-                    preproc=lambda x: x.copy(),  # fix negative stride issue
+                    preproc=lambda x: x.copy(),
                     as_non_tensor=True,
                     mode="rgb_array",
                 )
@@ -371,7 +372,6 @@ class MaddpgExperiment(BaseMARLExperiment):
                 VideoRecorder(logger=video_logger, tag="vmas_rendered")
             )
 
-            # deterministic policy (no exploration noise)
             render_policy = TensorDictSequential(*self.policies.values())
             render_policy.eval()
 
@@ -388,5 +388,3 @@ class MaddpgExperiment(BaseMARLExperiment):
         
         except Exception as e:
             print(f"Could not render policy: {e}")
-
-        

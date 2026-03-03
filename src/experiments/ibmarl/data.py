@@ -1,6 +1,10 @@
 '''
-holds the functions that manage the replay buffer and data collection
+holds the functions that manage the replay buffer and data collection.
+Replay strategy matches RLFD: demo buffer (pre-loaded) + online buffer,
+with linear annealing of demo fraction from 50% to 0% over training.
 '''
+from typing import Dict, Tuple
+
 from tensordict.nn import TensorDictSequential
 from tensordict import TensorDictBase, TensorDict
 from torchrl.collectors import SyncDataCollector
@@ -62,95 +66,122 @@ def build_data_collector(cfg, parent, rl_policies, env, device):
 
     return exploration_policies, collector, noise_modules
 
-def build_replay_buffer(cfg, env, device):
-    demonstration_path = cfg.get('demonstrations_path')
-    memory_size = cfg.get('memory_size')
-    batch_size = cfg.get('training').get('train_batch_size')
-
-    # setup replay buffer logic here
-    replay_buffers = {}
-    for group, _agents in env.group_map.items():
-        replay_buffer = ReplayBuffer(
-            storage = LazyMemmapStorage(memory_size), #must map to cpu
-            sampler = RandomSampler(),
-            batch_size = batch_size,
-        )
-
-        
-        if device.type != "cpu": #move to gpu if not training on cpu
-            replay_buffer.append_transform(lambda td: td.to(device))
-
-        _load_demonstrations(demonstration_path, group, replay_buffer)
-
-        replay_buffers[group] = replay_buffer
-    return replay_buffers
-
-def _load_demonstrations(demonstration_path, group, replay_buffer):
+def _load_demonstrations_into_buffer(
+    demonstration_path: Path, group: str, replay_buffer: ReplayBuffer, env
+) -> None:
     """
-    Loads demonstrations into the buffer, matching the [Batch, Agents, 1] structure
-    of the live collector.
+    Load demonstrations into the given replay buffer, matching the
+    [Batch, Agents, *] structure of the live collector (same as MADDPG/RLFD).
     """
-    if not demonstration_path or not Path(demonstration_path).exists():
-        raise Exception("Demonstrations not found at {demonstration_path}")
+    if not demonstration_path or not demonstration_path.exists():
+        raise FileNotFoundError(f"Demonstrations not found at {demonstration_path}")
 
-    print(f"Loading demonstrations for group '{group}' from {demonstration_path}")
-    try:
-        # 1. Load data
-        demo_data = torch.load(demonstration_path, map_location="cpu", weights_only=False)
-        
-        obs = torch.tensor(np.array(demo_data["obs"]), dtype=torch.float32)      # [T, 3, 18]
-        act = torch.tensor(np.array(demo_data["act"]), dtype=torch.float32)      # [T, 3, 2]
-        rew = torch.tensor(np.array(demo_data["rewards"]), dtype=torch.float32)  # [T, 3] or [T, 3, 1]
-        
-        # --- FIX: UNSQUEEZE Rewards to match [T, 3, 1] ---
-        # The live collector uses [3, 1], so we must ensure the last dim is 1.
-        if rew.ndim == 2:  # If shape is [T, 3]
-            rew = rew.unsqueeze(-1)  # Becomes [T, 3, 1]
-            
-        total_elements = obs.shape[0]
+    print(f"[IBMARL] Loading demonstrations for group '{group}' from {demonstration_path}")
+    demo_data = torch.load(
+        demonstration_path, map_location="cpu", weights_only=False
+    )
 
-        # 2. Build the 'agents' TensorDict 
-        # Matches fields={agents: ...} in your printout
-        agents_data = TensorDict({
+    obs = torch.tensor(np.array(demo_data["obs"]), dtype=torch.float32)
+    act = torch.tensor(np.array(demo_data["act"]), dtype=torch.float32)
+    rew = torch.tensor(np.array(demo_data["rewards"]), dtype=torch.float32)
+
+    if rew.ndim == 2:
+        rew = rew.unsqueeze(-1)
+
+    total_elements = obs.shape[0]
+    n_agents = obs.shape[1]
+
+    agents_data = TensorDict(
+        {
             "observation": obs,
             "action": act,
-            "episode_reward": rew, # Now guaranteed to be [T, 3, 1]
-        }, batch_size=[total_elements, 3]) # Matches 'agents' batch_size=[3] from printout
+            "episode_reward": rew,
+        },
+        batch_size=[total_elements, n_agents],
+    )
 
-        # 3. Build the 'next' TensorDict
-        # Your printout shows 'next' contains 'agents' with its own done/reward
-        next_agents_data = agents_data.clone()
-        
-        # Add agent-level done to 'next -> agents' (as seen in your printout)
-        next_agents_data.set("done", torch.zeros((total_elements, 3, 1), dtype=torch.bool))
-        next_agents_data.set("terminated", torch.zeros((total_elements, 3, 1), dtype=torch.bool))
-        next_agents_data.set("reward", rew.clone()) # Often 'reward' exists alongside 'episode_reward'
+    next_agents_data = agents_data.clone()
+    next_agents_data.set(
+        "done",
+        torch.zeros((total_elements, n_agents, 1), dtype=torch.bool),
+    )
+    next_agents_data.set(
+        "terminated",
+        torch.zeros((total_elements, n_agents, 1), dtype=torch.bool),
+    )
+    next_agents_data.set("reward", rew.clone())
 
-        next_td = TensorDict({
+    next_td = TensorDict(
+        {
             group: next_agents_data,
-            "done": torch.zeros((total_elements, 1), dtype=torch.bool),      # Global done
-            "terminated": torch.zeros((total_elements, 1), dtype=torch.bool), # Global terminated
-        }, batch_size=[total_elements])
+            "done": torch.zeros((total_elements, 1), dtype=torch.bool),
+            "terminated": torch.zeros((total_elements, 1), dtype=torch.bool),
+        },
+        batch_size=[total_elements],
+    )
 
-        # 4. Final Top-Level TensorDict matches the collector output
-        td = TensorDict({
+    td = TensorDict(
+        {
             group: agents_data,
             "next": next_td,
             "done": torch.zeros((total_elements, 1), dtype=torch.bool),
             "terminated": torch.zeros((total_elements, 1), dtype=torch.bool),
-            "collector": TensorDict({
-                 "traj_ids": torch.zeros((total_elements,), dtype=torch.int64)
-            }, batch_size=[total_elements])
-        }, batch_size=[total_elements])
+        },
+        batch_size=[total_elements],
+    )
 
-        # 5. Extend the buffer
-        replay_buffer.extend(td)
-        print(f"Successfully loaded {total_elements} transitions into {group} buffer with shape {rew.shape}.")
-        
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise Exception("Failed to load demonstrations for group {group}: {e}")
+    replay_buffer.extend(td)
+    print(
+        f"[IBMARL] Loaded {total_elements} demonstration transitions into {group} demo buffer."
+    )
+
+
+def _concat_minibatches(td1: TensorDictBase, td2: TensorDictBase) -> TensorDictBase:
+    """Concatenate two TensorDict minibatches along batch dimension (same as RLFD)."""
+    total_batch = td1.batch_size[0] + td2.batch_size[0]
+    device = td1.device
+    out = TensorDict({}, batch_size=[total_batch], device=device)
+
+    for key in td1.keys(True, True):
+        v1 = td1.get(key)
+        v2 = td2.get(key)
+        if v1 is None or v2 is None:
+            continue
+        out.set(key, torch.cat([v1, v2], dim=0))
+
+    return out
+
+
+def build_demo_and_online_buffers(
+    cfg, env, device
+) -> Tuple[Dict[str, ReplayBuffer], Dict[str, ReplayBuffer]]:
+    """
+    Build demo (pre-loaded) and online (empty) replay buffers per group.
+    Same storage/sampler/batch_size as MADDPG/RLFD.
+    """
+    demonstration_path = Path(cfg["demonstrations_path"])
+    memory_size = cfg["memory_size"]
+    train_batch_size = cfg["training"]["train_batch_size"]
+
+    demo_buffers: Dict[str, ReplayBuffer] = {}
+    online_buffers: Dict[str, ReplayBuffer] = {}
+
+    for group, _agents in env.group_map.items():
+        for name, buffers in (("demo", demo_buffers), ("online", online_buffers)):
+            rb = ReplayBuffer(
+                storage=LazyMemmapStorage(memory_size),
+                sampler=RandomSampler(),
+                batch_size=train_batch_size,
+            )
+            if device.type != "cpu":
+                rb.append_transform(lambda td: td.to(device))
+            buffers[group] = rb
+
+        _load_demonstrations_into_buffer(
+            demonstration_path, group, demo_buffers[group], env
+        )
+
+    return demo_buffers, online_buffers
 
 def process_batch(env, batch: TensorDictBase) -> TensorDictBase:
     """

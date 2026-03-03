@@ -35,9 +35,10 @@ strict : True #choose best combinatoion of policies or better policy actions
 soft : True
 temperature: 0.05
 
-num_critics : 3
+# For RLFD parity only critic 0 is trained; use 1 so arbiter uses the same critic.
+num_critics: 1
 
 # Exploration noise parameters
 exploration_noise:
-  sigma_init: 0.00  # Initial Gaussian noise standard deviation for exploration
-  sigma_end: 0.00   # Final Gaussian noise standard deviation (after annealing)
+  sigma_init: 0.1  # Initial Gaussian noise standard deviation for exploration
+  sigma_end: 0.1   # Final Gaussian noise standard deviation (after annealing)

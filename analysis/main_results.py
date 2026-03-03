@@ -15,10 +15,11 @@ CONFIG: dict[str, dict[str, str | float]] = {
     
     # DENSE REWARDS
     "navigation_dense": {
-        "maddpg": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rl",
-        "rlfd": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rlfd",
-        "rft": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rft",
+        # "maddpg": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rl",
+        # "rlfd": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rlfd",
+        # "rft": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rft",
         "ibmarl": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/ibmarl",
+        "ibmarl (noisy IL)": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/ibmarl_il_explore",
     },
     "navigation_sparse": {
         "maddpg": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison_sparse/rl",

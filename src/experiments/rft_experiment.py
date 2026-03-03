@@ -22,6 +22,7 @@ buffer for RL data, and DDPG loss configuration) are identical to MADDPG.
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict
+import time
 
 import numpy as np
 import torch
@@ -137,11 +138,8 @@ class RftExperiment(MaddpgExperiment):
     """
 
     def __init__(self, config):
-        # MADDPG setup: policies, critics, collector, replay buffer, losses,
-        # target updaters, optimisers
         super().__init__(config)
 
-        # Additional demonstration replay buffers (RL buffer from MADDPG is untouched)
         self.demo_replay_buffers = _build_demo_buffers(
             config, self.env, self.device
         )
@@ -158,10 +156,6 @@ class RftExperiment(MaddpgExperiment):
         )
 
     def _bc_weight(self, iteration: int) -> float:
-        """
-        Compute alpha * lambda(t), where lambda(t) linearly anneals from 1.0 to 0.0
-        over self._bc_anneal_n_iters iterations.
-        """
         if self._bc_alpha <= 0.0 or self._bc_anneal_n_iters <= 0:
             return 0.0
 
@@ -171,18 +165,12 @@ class RftExperiment(MaddpgExperiment):
         return self._bc_alpha * lam
 
     def _compute_bc_loss_for_group(self, group: str) -> torch.Tensor:
-        """
-        Sample a batch from the demo buffer and compute MSE between the
-        current policy actions and demonstration actions.
-        """
         demo_mb = self.demo_replay_buffers[group].sample(
             batch_size=self._bc_batch_size
         )
 
-        # Save target (demonstration) actions before they are overwritten
         target_actions = demo_mb.get((group, "action")).clone()
 
-        # Run the current policy to get predicted actions
         policy_td = self.policies[group](demo_mb)
         pred_actions = policy_td.get((group, "action"))
 
@@ -201,17 +189,26 @@ class RftExperiment(MaddpgExperiment):
             ),
         )
 
-        episode_reward_mean_map = {group: [] for group in self.env.group_map.keys()}
         train_group_map = deepcopy(self.env.group_map)
 
         max_grad_norm = self.config.get("training").get("max_grad_norm")
         n_optimiser_steps = self.config.get("training").get("n_optimiser_steps")
 
+        start_time = time.time()
+        total_frames = 0
+        total_episodes = 0
+        total_train_steps = 0
+
         for iteration, batch in enumerate(self.collector):
             current_frames = batch.numel()
+            total_frames += current_frames
             batch = self.process_batch(batch)
 
             bc_weight = self._bc_weight(iteration)
+
+            actor_losses = {group: [] for group in self.env.group_map.keys()}
+            critic_losses = {group: [] for group in self.env.group_map.keys()}
+            bc_losses = {group: [] for group in self.env.group_map.keys()}
 
             for group in train_group_map.keys():
                 group_batch = batch.exclude(
@@ -221,7 +218,7 @@ class RftExperiment(MaddpgExperiment):
                         if _group != group
                         for key in [_group, ("next", _group)]
                     ]
-                )  # exclude other groups' data
+                )
                 group_batch = group_batch.reshape(-1)
                 self.replay_buffers[group].extend(group_batch)
 
@@ -230,16 +227,22 @@ class RftExperiment(MaddpgExperiment):
 
                     loss_vals = self.losses[group](minibatch)
 
-                    # Start from the MADDPG actor/value losses
                     actor_loss = loss_vals["loss_actor"]
                     value_loss = loss_vals["loss_value"]
 
-                    # Add BC regularizer on the actor only
+                    actor_loss_val = actor_loss.item()
+                    critic_loss_val = value_loss.item()
+
+                    bc_loss_val = 0.0
                     if bc_weight > 0.0:
                         bc_loss = self._compute_bc_loss_for_group(group)
+                        bc_loss_val = bc_loss.item()
                         actor_loss = actor_loss + bc_weight * bc_loss
 
-                    # Actor update
+                    actor_losses[group].append(actor_loss_val)
+                    critic_losses[group].append(critic_loss_val)
+                    bc_losses[group].append(bc_loss_val)
+
                     actor_optim = self.optimisers[group]["loss_actor"]
                     actor_loss.backward()
                     actor_params = actor_optim.param_groups[0]["params"]
@@ -247,7 +250,6 @@ class RftExperiment(MaddpgExperiment):
                     actor_optim.step()
                     actor_optim.zero_grad()
 
-                    # Critic update (unchanged from MADDPG)
                     value_optim = self.optimisers[group]["loss_value"]
                     value_loss.backward()
                     value_params = value_optim.param_groups[0]["params"]
@@ -256,26 +258,49 @@ class RftExperiment(MaddpgExperiment):
                     value_optim.zero_grad()
 
                     self.target_updaters[group].step()
+                    total_train_steps += 1
 
-                # Annealing update for exploration noise (unchanged)
                 self.exploration_policies[group][-1].step(current_frames)
 
-            # Logging (identical to MADDPG)
+            # --- Metrics ---
+            elapsed = time.time() - start_time
+            speed = total_frames / max(elapsed, 1e-6)
+
+            done_global = batch.get(("next", "done"))
+            episodes_this_iter = int(done_global.sum().item())
+            total_episodes += episodes_this_iter
+
             for group in self.env.group_map.keys():
-                episode_reward_mean = (
-                    batch.get(("next", group, "episode_reward"))[
-                        batch.get(("next", group, "done"))
-                    ]
-                    .mean()
-                    .item()
+                done = batch.get(("next", group, "done"))
+                ep_rewards = batch.get(("next", group, "episode_reward"))[done]
+                episode_reward_mean = ep_rewards.mean().item() if ep_rewards.numel() > 0 else 0.0
+
+                n_opt = max(len(actor_losses[group]), 1)
+
+                self.metrics_logger.log(
+                    iteration=iteration,
+                    group=group,
+                    elapsed_time=round(elapsed, 2),
+                    episode=total_episodes,
+                    step=total_frames,
+                    train_step=total_train_steps,
+                    speed_fps=round(speed, 2),
+                    episode_reward_mean=episode_reward_mean,
+                    actor_loss=round(sum(actor_losses[group]) / n_opt, 6),
+                    critic_loss=round(sum(critic_losses[group]) / n_opt, 6),
+                    replay_size=len(self.replay_buffers[group]),
+                    bc_loss=round(sum(bc_losses[group]) / n_opt, 6),
+                    bc_weight=round(bc_weight, 6),
                 )
 
-                episode_reward_mean_map[group].append(episode_reward_mean)
+            if iteration % 10 == 0:
+                self.metrics_logger.save()
 
             pbar.set_description(
                 ", ".join(
                     [
-                        f"episode_reward_mean_{group} = {episode_reward_mean_map[group][-1]}"
+                        f"episode_reward_mean_{group} = "
+                        f"{self.metrics_logger.get_values('episode_reward_mean', group)[-1]}"
                         for group in self.env.group_map.keys()
                     ]
                 ),
@@ -283,12 +308,12 @@ class RftExperiment(MaddpgExperiment):
             )
             pbar.update()
 
-        self.results["group_map_keys"] = self.env.group_map.keys()
-        self.results["episode_reward_mean_map"] = episode_reward_mean_map
+        self.metrics_logger.save()
 
+        first_group = list(self.env.group_map.keys())[0]
+        recent = self.metrics_logger.get_values("episode_reward_mean", first_group)[-10:]
         return (
             f"RFT training complete. Environment: {self.config['scenario_name']}, "
             f"Experiment Type: {self.experiment_type}, Seed: {self.seed}.\n\n"
-            f"Results: {self.results['episode_reward_mean_map']['agents'][-10:]}"
+            f"Results: {recent}"
         )
-

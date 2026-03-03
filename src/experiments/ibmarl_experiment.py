@@ -2,9 +2,8 @@
 from src.experiments.base_marl_experiment import BaseMARLExperiment
 
 
-
-
 import copy
+import time
 import torch
 
 
@@ -21,15 +20,19 @@ from tensordict import TensorDict
 from src.experiments.ibmarl.networks import R2bcPolicy, build_rl_policies, build_critics, build_targets
 from src.experiments.ibmarl.losses import GroupTrainer
 from src.experiments.ibmarl.arbiter import ActionArbiter
-from src.experiments.ibmarl.data import build_data_collector, build_replay_buffer, process_batch
+from src.experiments.ibmarl.modules import build_il_noise_modules
+from src.experiments.ibmarl.data import (
+    build_data_collector,
+    build_demo_and_online_buffers,
+    _concat_minibatches,
+    process_batch,
+)
 
 
 class IbmarlExperiment(BaseMARLExperiment):
     def __init__(self, config):
         super().__init__(config)
 
-
-        #setup networks
         bc_path = Path(config["r2bc_checkpoint_path"])
         self.il_policies = R2bcPolicy(bc_path, self.env, self.device)
 
@@ -39,13 +42,26 @@ class IbmarlExperiment(BaseMARLExperiment):
 
         self.target_policies, self.target_critics = build_targets(self.rl_policies, self.critics, self.env)
 
-
-        self.action_arbiter = ActionArbiter(config, self.il_policies, self.rl_policies, self.target_policies, self.critics, self.target_critics, self.env, self.device)
+        self.il_noise_modules = build_il_noise_modules(config, self.env, self.device)
+        self.action_arbiter = ActionArbiter(
+            config,
+            self.il_policies,
+            self.rl_policies,
+            self.target_policies,
+            self.critics,
+            self.target_critics,
+            self.env,
+            self.device,
+            il_noise_modules=self.il_noise_modules,
+        )
 
         self.agents_exploration_policy, self.collector, self.noise_modules = build_data_collector(config, self, self.rl_policies, self.env, self.device)
 
-        self.replay_buffers = build_replay_buffer(config, self.env, self.device)
-
+        demo_buffers, online_buffers = build_demo_and_online_buffers(
+            config, self.env, self.device
+        )
+        self.demo_replay_buffers = demo_buffers
+        self.replay_buffers = online_buffers
 
         self.trainer = GroupTrainer(config, self.rl_policies, self.critics, self.target_policies, self.target_critics, self.action_arbiter, self.env)
         self._rl_video_created = False
@@ -72,7 +88,6 @@ class IbmarlExperiment(BaseMARLExperiment):
             if episode_rewards.numel() == 0:
                 mean_reward_by_group[group] = 0.0
                 continue
-            # Use up to n_episodes (first n_episodes) and average
             n = min(n_episodes, episode_rewards.shape[0])
             mean_reward_by_group[group] = episode_rewards[:n].float().mean().item()
 
@@ -88,115 +103,150 @@ class IbmarlExperiment(BaseMARLExperiment):
             ), 
         )
 
-        episode_reward_mean_map = {group: [] for group in self.env.group_map.keys()}
-        rl_action_fraction_map = {group: [] for group in self.env.group_map.keys()}
-        rl_only_episode_reward_mean_map = {group: [] for group in self.env.group_map.keys()}
-        mean_action_diff_map = {group: [] for group in self.env.group_map.keys()}
-        mean_q_diff_map = {group: [] for group in self.env.group_map.keys()}
-        var_q_diff_map = {group: [] for group in self.env.group_map.keys()}
         train_group_map = copy.deepcopy(self.env.group_map)
+
+        start_time = time.time()
+        total_frames = 0
+        total_episodes = 0
+        total_train_steps = 0
+
+        n_iters = self.config.get("n_iters")
+        total_iters = max(1, n_iters - 1)
+        train_batch_size = self.config.get("training").get("train_batch_size")
 
         for iteration, batch in enumerate(self.collector):
 
+            # --- Arbiter metrics from batch ---
+            arbiter_metrics = {}
             for group in self.env.group_map.keys():
-                # Retrieve the choices saved in modules.py
-                choices = batch.get((group, "arbiter_choice")) 
-                
-                if choices is not None:
-                    frac = choices.float().mean().item()
-                    rl_action_fraction_map[group].append(frac)
-                else:
-                    print(f"Warning: No arbiter choice found for {group}")
-                
-                # Retrieve metrics saved in modules.py
+                choices = batch.get((group, "arbiter_choice"))
+
+                rl_frac = choices.float().mean().item() if choices is not None else 0.0
+
                 mean_action_diff = batch.get((group, "mean_action_diff"))
                 mean_q_diff = batch.get((group, "mean_q_diff"))
                 var_q_diff = batch.get((group, "var_q_diff"))
-                
-                if mean_action_diff is not None:
-                    # Extract scalar from batched tensor (all values are the same)
-                    mean_action_diff_map[group].append(mean_action_diff.mean().item())
-                else:
-                    mean_action_diff_map[group].append(0.0)
-                
-                if mean_q_diff is not None:
-                    # Extract scalar from batched tensor (all values are the same)
-                    mean_q_diff_map[group].append(mean_q_diff.mean().item())
-                else:
-                    mean_q_diff_map[group].append(0.0)
-                
-                if var_q_diff is not None:
-                    # Extract scalar from batched tensor (all values are the same)
-                    var_q_diff_map[group].append(var_q_diff.mean().item())
-                else:
-                    var_q_diff_map[group].append(0.0)
-                    
+
+                arbiter_metrics[group] = {
+                    "rl_action_fraction": rl_frac,
+                    "mean_action_diff": mean_action_diff.mean().item() if mean_action_diff is not None else 0.0,
+                    "mean_q_diff": mean_q_diff.mean().item() if mean_q_diff is not None else 0.0,
+                    "var_q_diff": var_q_diff.mean().item() if var_q_diff is not None else 0.0,
+                }
+
             current_frames = batch.numel()
+            total_frames += current_frames
             batch = process_batch(self.env, batch)
 
+            actor_losses = {group: [] for group in self.env.group_map.keys()}
+            critic_losses = {group: [] for group in self.env.group_map.keys()}
 
             for group in train_group_map.keys():
                 group_batch = batch.exclude(
                     *[
-                        key 
+                        key
                         for _group in self.env.group_map.keys()
                         if _group != group
                         for key in [_group, ("next", _group)]
                     ]
-                ) #exclude other groups' data
-                group_batch = group_batch.reshape(
-                    -1
-                ) 
+                )
+                group_batch = group_batch.reshape(-1)
 
-                # 1. Force unlock the internal storage of the replay buffer
-                # This is often necessary if the buffer was created before the collector
-                if hasattr(self.replay_buffers[group].storage, "_storage"):
-                    if isinstance(self.replay_buffers[group].storage._storage, TensorDict):
-                        self.replay_buffers[group].storage._storage.unlock_()
+                self.replay_buffers[group].extend(group_batch)
 
-                # 2. Extend with a clone to be safe
-                self.replay_buffers[group].extend(group_batch.clone())
+                progress = min(1.0, float(iteration) / float(total_iters))
+                demo_frac = 0.5 * (1.0 - progress)
+                demo_batch_size = int(round(train_batch_size * demo_frac))
+                if demo_batch_size >= train_batch_size:
+                    demo_batch_size = train_batch_size - 1
+                demo_batch_size = max(0, demo_batch_size)
+                online_batch_size = train_batch_size - demo_batch_size
 
+                for _ in range(self.config.get("training").get("n_optimiser_steps")):
+                    if demo_batch_size > 0 and online_batch_size > 0:
+                        demo_mb = self.demo_replay_buffers[group].sample(
+                            batch_size=demo_batch_size
+                        )
+                        online_mb = self.replay_buffers[group].sample(
+                            batch_size=online_batch_size
+                        )
+                        minibatch = _concat_minibatches(demo_mb, online_mb)
+                    elif demo_batch_size > 0:
+                        minibatch = self.demo_replay_buffers[group].sample(
+                            batch_size=demo_batch_size
+                        )
+                    else:
+                        minibatch = self.replay_buffers[group].sample(
+                            batch_size=online_batch_size
+                        )
 
+                    critic_info = self.trainer.update_critic(group, minibatch)
+                    actor_info = self.trainer.update_actor(group, minibatch)
 
-                for _ in range(self.config.get('training').get('n_optimiser_steps')):
+                    critic_losses[group].append(critic_info["critic_loss"])
+                    actor_losses[group].append(actor_info["actor_loss"])
 
-                    for _ in range(self.config.get('training').get('num_critic_updates')):
-                        minibatch = self.replay_buffers[group].sample()
-                        self.trainer.update_critic(group, minibatch) #TODO: save returns
-                        self.trainer.polyak_step(self.critics[group], self.target_critics[group])
+                    self.trainer.polyak_step(
+                        self.critics[group][0], self.target_critics[group][0]
+                    )
+                    self.trainer.polyak_step(
+                        self.rl_policies[group], self.target_policies[group]
+                    )
 
-                    self.trainer.update_actor(group, minibatch) #TODO: save returns
-                    self.trainer.polyak_step(self.rl_policies[group], self.target_policies[group])
+                    self.noise_modules[group].step(current_frames)
+                    self.il_noise_modules[group].step(current_frames)
 
-                # Annealing update for exploration noise
-                self.noise_modules[group].step(current_frames)
+                    total_train_steps += 1
 
-            # On occasion, evaluate ONLY THE RL part of the IBMARL policy on 10 episodes in the environment.
+            # --- RL-only evaluation ---
+            rl_only_means = None
             if iteration % 1 == 0:
                 rl_only_means = self.evaluate_rl_only(n_episodes=20)
-                for group in self.env.group_map.keys():
-                    rl_only_episode_reward_mean_map[group].append(rl_only_means[group])
-            else:
-                for group in self.env.group_map.keys():
-                    rl_only_episode_reward_mean_map[group].append(None)
 
-            # Logging
+            # --- Metrics ---
+            elapsed = time.time() - start_time
+            speed = total_frames / max(elapsed, 1e-6)
+
+            done_global = batch.get(("next", "done"))
+            episodes_this_iter = int(done_global.sum().item())
+            total_episodes += episodes_this_iter
+
             for group in self.env.group_map.keys():
-                episode_reward_mean = (
-                    batch.get(("next", group, "episode_reward"))[
-                        batch.get(("next", group, "done"))
-                    ]
-                    .mean()
-                    .item()
-                    )
-                
-                episode_reward_mean_map[group].append(episode_reward_mean)
+                done = batch.get(("next", group, "done"))
+                ep_rewards = batch.get(("next", group, "episode_reward"))[done]
+                episode_reward_mean = ep_rewards.mean().item() if ep_rewards.numel() > 0 else 0.0
+
+                n_opt = max(len(actor_losses[group]), 1)
+
+                rl_only_val = rl_only_means[group] if rl_only_means is not None else None
+
+                self.metrics_logger.log(
+                    iteration=iteration,
+                    group=group,
+                    elapsed_time=round(elapsed, 2),
+                    episode=total_episodes,
+                    step=total_frames,
+                    train_step=total_train_steps,
+                    speed_fps=round(speed, 2),
+                    episode_reward_mean=episode_reward_mean,
+                    actor_loss=round(sum(actor_losses[group]) / n_opt, 6),
+                    critic_loss=round(sum(critic_losses[group]) / n_opt, 6),
+                    replay_size=len(self.replay_buffers[group]),
+                    demo_fraction=round(demo_frac, 4),
+                    rl_action_fraction=round(arbiter_metrics[group]["rl_action_fraction"], 4),
+                    rl_only_episode_reward_mean=rl_only_val,
+                    mean_action_diff=round(arbiter_metrics[group]["mean_action_diff"], 6),
+                    mean_q_diff=round(arbiter_metrics[group]["mean_q_diff"], 6),
+                    var_q_diff=round(arbiter_metrics[group]["var_q_diff"], 6),
+                )
+
+            if iteration % 10 == 0:
+                self.metrics_logger.save()
 
             pbar.set_description(
                 ", ".join(
                     [
-                        f"episode_reward_mean_{group} = {episode_reward_mean_map[group][-1]}"
+                        f"episode_reward_mean_{group} = {self.metrics_logger.get_values('episode_reward_mean', group)[-1]}"
                         for group in self.env.group_map.keys()
                     ]
                 ),
@@ -204,15 +254,15 @@ class IbmarlExperiment(BaseMARLExperiment):
             )
             pbar.update()
 
-        self.results["group_map_keys"] = self.env.group_map.keys()
-        self.results["episode_reward_mean_map"] = episode_reward_mean_map
-        self.results["rl_action_fraction"] = rl_action_fraction_map
-        self.results["rl_only_episode_reward_mean_map"] = rl_only_episode_reward_mean_map
-        self.results["mean_action_diff"] = mean_action_diff_map
-        self.results["mean_q_diff"] = mean_q_diff_map
-        self.results["var_q_diff"] = var_q_diff_map
+        self.metrics_logger.save()
 
-        return f"IBMARL training complete. Environment: {self.config['scenario_name']}, Experiment Type: {self.experiment_type}, Seed: {self.seed}.\n\nResults: {self.results['rl_only_episode_reward_mean_map']['agents'][-10:]}"
+        first_group = list(self.env.group_map.keys())[0]
+        recent_rl_only = self.metrics_logger.get_values("rl_only_episode_reward_mean", first_group)[-10:]
+        return (
+            f"IBMARL training complete. Environment: {self.config['scenario_name']}, "
+            f"Experiment Type: {self.experiment_type}, Seed: {self.seed}.\n\n"
+            f"Results: {recent_rl_only}"
+        )
 
     def save_results(self):
         """Override to add RL policy video/gif creation for IBMARL."""
@@ -271,7 +321,6 @@ class IbmarlExperiment(BaseMARLExperiment):
         print("Saving video...")
         env_with_render.transform.dump()
 
-        # Find the created mp4 file (CSVLogger saves to log_dir/exp_name or log_dir)
         mp4_patterns = [
             videos_dir / "vmas_logs" / "video_rl_policy_*.mp4",
             videos_dir / "video_rl_policy_*.mp4",
@@ -288,18 +337,15 @@ class IbmarlExperiment(BaseMARLExperiment):
                 mp4_path = sorted(matches)[-1]
 
         if mp4_path is not None and mp4_path.exists():
-            # Save a copy with a deterministic name
             final_mp4 = videos_dir / "rl_policy.mp4"
             if mp4_path != final_mp4:
                 import shutil
                 shutil.copy(mp4_path, final_mp4)
             print(f"Saved RL policy video to: {final_mp4.resolve()}")
 
-            # Convert to GIF
             gif_path = videos_dir / "rl_policy.gif"
             try:
                 frames = iio.imread(str(final_mp4), index=None)
-                # Subsample frames for smaller gif (e.g. every 2nd frame)
                 step = max(1, len(frames) // 60)
                 frames_sub = frames[::step]
                 iio.imwrite(str(gif_path), frames_sub, duration=step / 30.0, loop=0)
@@ -312,22 +358,6 @@ class IbmarlExperiment(BaseMARLExperiment):
     def render_policy(self):
         """Render the RL policy only (not combined IL/RL). Uses _create_rl_policy_video_and_gif."""
         try:
-            self._create_rl_policy_video_and_gif()  # Skips if already created by save_results
+            self._create_rl_policy_video_and_gif()
         except Exception as e:
             print(f"Could not render RL policy: {e}")
-    
-
-
-    
-
-
-
-
-    
-
-    
-
-
-
-
-   
