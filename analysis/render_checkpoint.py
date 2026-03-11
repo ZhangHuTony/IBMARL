@@ -18,7 +18,7 @@ from src.experiments.ibmarl.networks import build_rl_policies
 # Configuration
 # -----------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-EXPERIMENT_DIR = PROJECT_ROOT / "/home/connor/Desktop/Projects/IBMARL/results/ibmarl_navigation_2026-02-09_09-35-57"
+EXPERIMENT_DIR = PROJECT_ROOT / "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison_sparse/ibmarl/ibmarl_navigation_2026-02-09_13-27-52"
 N_SEEDS = 3
 HORIZON = 100  # Steps per rollout
 # -----------------------------------------------------------------------------
@@ -46,7 +46,7 @@ def build_policies_from_checkpoint(config: dict, env, device: torch.device):
     Build policy architecture and load weights from checkpoint.
     Uses the same structure as MADDPG/IBMARL RL policies.
     """
-    policies, _ = build_rl_policies(config, env, device)
+    policies = build_rl_policies(config, env, device)
     return policies
 
 
@@ -107,6 +107,7 @@ def main():
     render_config = {
         **config,
         "frames_per_batch": HORIZON,  # Single parallel env for clear video
+        "horizon": HORIZON,
     }
     env = make_env(render_config, device)
 

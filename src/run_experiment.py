@@ -152,7 +152,8 @@ if __name__ == "__main__":
 
     #Optional Arguments (can override YAML)
     parser.add_argument("--render", action="store_true", help="Enable rendering")
-    parser.add_argument("--seed", type=int, help="Seed for the experiment")
+    parser.add_argument("--seeds", type=int, default=1, help="Number of seeded runs to execute")
+    parser.add_argument("--seed-start", type=int, default=0, help="Starting seed value (increments by 1 per run)")
     parser.add_argument(
         "--sigma_init",
         type=float,
@@ -176,8 +177,6 @@ if __name__ == "__main__":
     cfg = load_config(args.scenario_name, args.exp_type)
 
     cfg["render"] = bool(args.render)
-    if args.seed is not None:
-        cfg["seed"] = args.seed
 
     # CLI overrides for IBMARL exploration noise
     if args.sigma_init is not None or args.sigma_end is not None:
@@ -186,7 +185,6 @@ if __name__ == "__main__":
                 "Command-line arguments --sigma_init/--sigma_end are only valid when exp_type='ibmarl'. "
                 f"Got exp_type='{cfg.get('exp_type')}'."
             )
-        # Ensure exploration_noise section exists
         if "exploration_noise" not in cfg or cfg["exploration_noise"] is None:
             cfg["exploration_noise"] = {}
         if args.sigma_init is not None:
@@ -194,9 +192,11 @@ if __name__ == "__main__":
         if args.sigma_end is not None:
             cfg["exploration_noise"]["sigma_end"] = float(args.sigma_end)
 
-    cfg = create_run_dirs(cfg)
-
-    run_experiment(cfg)
+    for seed in range(args.seed_start, args.seed_start + args.seeds):
+        run_cfg = cfg.copy()
+        run_cfg["seed"] = seed
+        run_cfg = create_run_dirs(run_cfg)
+        run_experiment(run_cfg)
 
 
 

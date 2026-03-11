@@ -5,6 +5,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 
+# Moving-average window for the mean curve (1 = no smoothing)
+N_WINDOW = 8
+
 # Project root (parent of analysis/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -14,18 +17,26 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG: dict[str, dict[str, str | float]] = {
     
     # DENSE REWARDS
-    "navigation_dense": {
-        # "maddpg": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rl",
-        # "rlfd": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rlfd",
-        # "rft": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rft",
-        "ibmarl": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/ibmarl",
-        "ibmarl (noisy IL)": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/ibmarl_il_explore",
-    },
+    # "navigation_dense": {
+    #     "r2bc": 1.3526,
+    #     "maddpg": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rl",
+    #     "rlfd": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rlfd",
+    #     "rft": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/rft",
+    #     "ibmarl": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/ibmarl",
+    #     # "ibmarl (noisy IL)": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison/ibmarl_il_explore",
+    #     # "ibmarl": "/home/connor/Desktop/Projects/IBMARL/results/dense_debugged",
+    # },
     "navigation_sparse": {
-        "maddpg": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison_sparse/rl",
-        "rlfd": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison_sparse/rlfd",
-        "rft": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison_sparse/rft",
-        "ibmarl": "/home/connor/Desktop/Projects/IBMARL/results/rlfd_rl_comparison_sparse/ibmarl",
+        "r2bc": -24.414,
+        # "r2bc": -40.0,
+        # "maddpg": "/home/connor/Desktop/Projects/IBMARL/results/maddpg_sparse",
+        "maddpg": "/home/connor/Desktop/Projects/IBMARL/results/sparse_navigation/maddpg",
+        "rlfd": "/home/connor/Desktop/Projects/IBMARL/results/sparse_navigation/rlfd",
+        "rft": "/home/connor/Desktop/Projects/IBMARL/results/sparse_navigation/rft",
+        "ibmarl": "/home/connor/Desktop/Projects/IBMARL/results/sparse_navigation/ibmarl",
+        "ibmarl-3C": "/home/connor/Desktop/Projects/IBMARL/results/sparse_navigation/ibmarl_3_critics",
+        "ibmarl (comb)": "/home/connor/Desktop/Projects/IBMARL/results/sparse_navigation/ibmarl_non_strict_selection",
+        # "ibmarl": "/home/connor/Desktop/Projects/IBMARL/results/dsparse_debugged",
     },
     # "navigation_dense": {
     #     # "r2bc": -2.18,
@@ -143,8 +154,13 @@ def main() -> None:
                 if not value:
                     continue
                 try:
-                    metric = "rl_only_episode_reward_mean" if method_name[:6] == "ibmarl" else "episode_reward_mean"
+                    metric = "eval_reward_mean" if method_name[:6] == "ibmarl" else "eval_reward_mean"
                     iterations, mean, stderr = load_metrics_for_method(value, metric=metric)
+                    if N_WINDOW > 1:
+                        kernel = np.ones(N_WINDOW) / N_WINDOW
+                        mean = np.convolve(mean, kernel, mode="valid")
+                        iterations = iterations[N_WINDOW - 1:]
+                        stderr = stderr[N_WINDOW - 1:]
                     print("Plotting", method_name, "for", env_name, "with", len(mean), "datapoints", "using metric", metric)
                     ax.plot(iterations, mean, label=method_name)
                     ax.fill_between(

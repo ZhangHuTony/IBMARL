@@ -23,8 +23,7 @@ from src.experiments.ibmarl.arbiter import ActionArbiter
 from src.experiments.ibmarl.modules import build_il_noise_modules
 from src.experiments.ibmarl.data import (
     build_data_collector,
-    build_demo_and_online_buffers,
-    _concat_minibatches,
+    build_single_replay_buffer,
     process_batch,
 )
 
@@ -57,41 +56,13 @@ class IbmarlExperiment(BaseMARLExperiment):
 
         self.agents_exploration_policy, self.collector, self.noise_modules = build_data_collector(config, self, self.rl_policies, self.env, self.device)
 
-        demo_buffers, online_buffers = build_demo_and_online_buffers(
+        # IBRL-style: single replay buffer with demos pre-loaded
+        self.replay_buffers = build_single_replay_buffer(
             config, self.env, self.device
         )
-        self.demo_replay_buffers = demo_buffers
-        self.replay_buffers = online_buffers
 
         self.trainer = GroupTrainer(config, self.rl_policies, self.critics, self.target_policies, self.target_critics, self.action_arbiter, self.env)
         self._rl_video_created = False
-
-    def evaluate_rl_only(self, n_episodes: int = 10) -> dict:
-        """
-        Evaluate only the RL policies (no IL / arbiter) in the environment.
-        Runs rollouts until n_episodes are completed, then returns mean episode reward per group.
-        """
-        rl_only_policy = TensorDictSequential(*self.rl_policies.values())
-        rl_only_policy.eval()
-
-        horizon = self.config.get("horizon", 100)
-        max_steps = horizon * (n_episodes + 5)
-
-        with torch.no_grad():
-            with set_exploration_type(ExplorationType.MODE):
-                out = self.env.rollout(max_steps, policy=rl_only_policy)
-
-        mean_reward_by_group = {}
-        for group in self.env.group_map.keys():
-            done = out.get(("next", group, "done"))
-            episode_rewards = out.get(("next", group, "episode_reward"))[done]
-            if episode_rewards.numel() == 0:
-                mean_reward_by_group[group] = 0.0
-                continue
-            n = min(n_episodes, episode_rewards.shape[0])
-            mean_reward_by_group[group] = episode_rewards[:n].float().mean().item()
-
-        return mean_reward_by_group
 
     def train(self) -> str:
         print("Training IBMARL Experiment...")
@@ -110,9 +81,9 @@ class IbmarlExperiment(BaseMARLExperiment):
         total_episodes = 0
         total_train_steps = 0
 
-        n_iters = self.config.get("n_iters")
-        total_iters = max(1, n_iters - 1)
         train_batch_size = self.config.get("training").get("train_batch_size")
+        min_warm_up_frames = self.config.get("ibmarl_min_warm_up_frames", 5000)
+        first_group = list(self.env.group_map.keys())[0]
 
         for iteration, batch in enumerate(self.collector):
 
@@ -138,70 +109,76 @@ class IbmarlExperiment(BaseMARLExperiment):
             total_frames += current_frames
             batch = process_batch(self.env, batch)
 
+            # --- Add transitions to single replay buffer ---
+            for group in train_group_map.keys():
+                group_batch = batch.select(
+                    group,
+                    "next",
+                    "done",
+                    "terminated",
+                    strict=False,
+                )
+                # Keep only the keys that match the demo-initialized buffer schema
+                group_batch = group_batch.select(
+                    (group, "observation"),
+                    (group, "action"),
+                    (group, "episode_reward"),
+                    ("next", group, "observation"),
+                    ("next", group, "action"),
+                    ("next", group, "episode_reward"),
+                    ("next", group, "reward"),
+                    ("next", group, "done"),
+                    ("next", group, "terminated"),
+                    ("next", "done"),
+                    ("next", "terminated"),
+                    "done",
+                    "terminated",
+                    strict=False,
+                )
+                group_batch = group_batch.reshape(-1)
+                self.replay_buffers[group].extend(group_batch)
+
+            # --- Warm-up: skip training until buffer has enough data ---
+            is_warm_up = len(self.replay_buffers[first_group]) < min_warm_up_frames
+            if is_warm_up:
+                print(
+                    f"[Warm-up] iteration {iteration}: "
+                    f"buffer={len(self.replay_buffers[first_group])}/{min_warm_up_frames}"
+                )
+
+            # --- Training (skipped during warm-up) ---
             actor_losses = {group: [] for group in self.env.group_map.keys()}
             critic_losses = {group: [] for group in self.env.group_map.keys()}
 
-            for group in train_group_map.keys():
-                group_batch = batch.exclude(
-                    *[
-                        key
-                        for _group in self.env.group_map.keys()
-                        if _group != group
-                        for key in [_group, ("next", _group)]
-                    ]
-                )
-                group_batch = group_batch.reshape(-1)
-
-                self.replay_buffers[group].extend(group_batch)
-
-                progress = min(1.0, float(iteration) / float(total_iters))
-                demo_frac = 0.5 * (1.0 - progress)
-                demo_batch_size = int(round(train_batch_size * demo_frac))
-                if demo_batch_size >= train_batch_size:
-                    demo_batch_size = train_batch_size - 1
-                demo_batch_size = max(0, demo_batch_size)
-                online_batch_size = train_batch_size - demo_batch_size
-
-                for _ in range(self.config.get("training").get("n_optimiser_steps")):
-                    if demo_batch_size > 0 and online_batch_size > 0:
-                        demo_mb = self.demo_replay_buffers[group].sample(
-                            batch_size=demo_batch_size
-                        )
-                        online_mb = self.replay_buffers[group].sample(
-                            batch_size=online_batch_size
-                        )
-                        minibatch = _concat_minibatches(demo_mb, online_mb)
-                    elif demo_batch_size > 0:
-                        minibatch = self.demo_replay_buffers[group].sample(
-                            batch_size=demo_batch_size
-                        )
-                    else:
+            if not is_warm_up:
+                for group in train_group_map.keys():
+                    for _ in range(self.config.get("training").get("n_optimiser_steps")):
                         minibatch = self.replay_buffers[group].sample(
-                            batch_size=online_batch_size
+                            batch_size=train_batch_size
                         )
 
-                    critic_info = self.trainer.update_critic(group, minibatch)
-                    actor_info = self.trainer.update_actor(group, minibatch)
+                        critic_info = self.trainer.update_critic(group, minibatch)
+                        actor_info = self.trainer.update_actor(group, minibatch)
 
-                    critic_losses[group].append(critic_info["critic_loss"])
-                    actor_losses[group].append(actor_info["actor_loss"])
+                        critic_losses[group].append(critic_info["critic_loss"])
+                        actor_losses[group].append(actor_info["actor_loss"])
 
-                    self.trainer.polyak_step(
-                        self.critics[group][0], self.target_critics[group][0]
-                    )
-                    self.trainer.polyak_step(
-                        self.rl_policies[group], self.target_policies[group]
-                    )
+                        self.trainer.polyak_step(
+                            self.critics[group][0], self.target_critics[group][0]
+                        )
+                        self.trainer.polyak_step(
+                            self.rl_policies[group], self.target_policies[group]
+                        )
 
-                    self.noise_modules[group].step(current_frames)
-                    self.il_noise_modules[group].step(current_frames)
+                        self.noise_modules[group].step(current_frames)
+                        self.il_noise_modules[group].step(current_frames)
 
-                    total_train_steps += 1
+                        total_train_steps += 1
 
-            # --- RL-only evaluation ---
-            rl_only_means = None
-            if iteration % 1 == 0:
-                rl_only_means = self.evaluate_rl_only(n_episodes=20)
+            # --- Dedicated evaluation (skip during warm-up) ---
+            eval_means = None
+            if not is_warm_up:
+                eval_means = self.evaluate(n_episodes=20)
 
             # --- Metrics ---
             elapsed = time.time() - start_time
@@ -217,8 +194,7 @@ class IbmarlExperiment(BaseMARLExperiment):
                 episode_reward_mean = ep_rewards.mean().item() if ep_rewards.numel() > 0 else 0.0
 
                 n_opt = max(len(actor_losses[group]), 1)
-
-                rl_only_val = rl_only_means[group] if rl_only_means is not None else None
+                eval_val = eval_means[group] if eval_means is not None else None
 
                 self.metrics_logger.log(
                     iteration=iteration,
@@ -229,12 +205,12 @@ class IbmarlExperiment(BaseMARLExperiment):
                     train_step=total_train_steps,
                     speed_fps=round(speed, 2),
                     episode_reward_mean=episode_reward_mean,
-                    actor_loss=round(sum(actor_losses[group]) / n_opt, 6),
-                    critic_loss=round(sum(critic_losses[group]) / n_opt, 6),
+                    eval_reward_mean=eval_val,
+                    actor_loss=round(sum(actor_losses[group]) / n_opt, 6) if actor_losses[group] else None,
+                    critic_loss=round(sum(critic_losses[group]) / n_opt, 6) if critic_losses[group] else None,
                     replay_size=len(self.replay_buffers[group]),
-                    demo_fraction=round(demo_frac, 4),
                     rl_action_fraction=round(arbiter_metrics[group]["rl_action_fraction"], 4),
-                    rl_only_episode_reward_mean=rl_only_val,
+                    rl_only_episode_reward_mean=eval_val,
                     mean_action_diff=round(arbiter_metrics[group]["mean_action_diff"], 6),
                     mean_q_diff=round(arbiter_metrics[group]["mean_q_diff"], 6),
                     var_q_diff=round(arbiter_metrics[group]["var_q_diff"], 6),

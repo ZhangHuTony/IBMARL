@@ -1,7 +1,9 @@
 '''
-holds the functions that manage the replay buffer and data collection.
-Replay strategy matches RLFD: demo buffer (pre-loaded) + online buffer,
-with linear annealing of demo fraction from 50% to 0% over training.
+Replay buffer and data collection for IBMARL.
+
+IBRL-style strategy: a single replay buffer per group with demos pre-loaded.
+Online transitions are added during training and naturally dilute/overwrite
+the demo data as the buffer fills.  No separate demo buffer, no annealing.
 '''
 from typing import Dict, Tuple
 
@@ -132,8 +134,37 @@ def _load_demonstrations_into_buffer(
 
     replay_buffer.extend(td)
     print(
-        f"[IBMARL] Loaded {total_elements} demonstration transitions into {group} demo buffer."
+        f"[IBMARL] Loaded {total_elements} demonstration transitions into {group} buffer."
     )
+
+
+def build_single_replay_buffer(
+    cfg, env, device
+) -> Dict[str, ReplayBuffer]:
+    """
+    IBRL-style single replay buffer per group with demos pre-loaded.
+    Online transitions are added during training; old data (including demos)
+    is naturally overwritten once the buffer fills.
+    """
+    demonstration_path = Path(cfg["demonstrations_path"])
+    buffer_size = cfg.get("ibmarl_replay_size", cfg["memory_size"])
+    train_batch_size = cfg["training"]["train_batch_size"]
+
+    replay_buffers: Dict[str, ReplayBuffer] = {}
+
+    for group, _agents in env.group_map.items():
+        rb = ReplayBuffer(
+            storage=LazyMemmapStorage(buffer_size),
+            sampler=RandomSampler(),
+            batch_size=train_batch_size,
+        )
+        if device.type != "cpu":
+            rb.append_transform(lambda td: td.to(device))
+        replay_buffers[group] = rb
+
+        _load_demonstrations_into_buffer(demonstration_path, group, rb, env)
+
+    return replay_buffers
 
 
 def _concat_minibatches(td1: TensorDictBase, td2: TensorDictBase) -> TensorDictBase:

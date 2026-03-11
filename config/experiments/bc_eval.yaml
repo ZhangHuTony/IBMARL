@@ -1,0 +1,3 @@
+extends: "../base.yaml"
+
+r2bc_checkpoint_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/policy_checkpoint.pth"

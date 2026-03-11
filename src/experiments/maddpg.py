@@ -201,6 +201,9 @@ class MaddpgExperiment(BaseMARLExperiment):
 
                 self.exploration_policies[group][-1].step(current_frames)
 
+            # --- Dedicated evaluation ---
+            eval_means = self.evaluate(n_episodes=20)
+
             # --- Metrics ---
             elapsed = time.time() - start_time
             speed = total_frames / max(elapsed, 1e-6)
@@ -225,6 +228,7 @@ class MaddpgExperiment(BaseMARLExperiment):
                     train_step=total_train_steps,
                     speed_fps=round(speed, 2),
                     episode_reward_mean=episode_reward_mean,
+                    eval_reward_mean=eval_means[group],
                     actor_loss=round(sum(actor_losses[group]) / n_opt, 6),
                     critic_loss=round(sum(critic_losses[group]) / n_opt, 6),
                     replay_size=len(self.replay_buffers[group]),
