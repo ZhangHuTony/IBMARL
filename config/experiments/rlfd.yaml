@@ -5,4 +5,4 @@
 extends: "../base.yaml"
 
 # Path to demonstrations file (loaded into demo replay buffer at startup)
-demonstrations_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/demonstrations.pt"
+demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_201300/demonstrations.pt"

@@ -81,16 +81,21 @@ class GroupTrainer:
             p_targ.data.mul_(1.0 - self.tau).add_(self.tau * p.data)
     
     def _build_optimisers(self):
-        # Use only first critic for value loss (same learning as MADDPG/RLFD)
+        # Every ensemble member is trained. Their parameters go into a single
+        # flat param group so the grad-clip in update_critic (which reads
+        # param_groups[0]) still covers the whole ensemble.
         optimisers = {}
         for group in self.env.group_map.keys():
+            critic_params = [
+                p for critic in self.critics[group] for p in critic.parameters()
+            ]
             optimisers[group] = {
                 "loss_actor": torch.optim.Adam(
                     self.rl_policies[group].parameters(),
                     lr=self.lr,
                 ),
                 "loss_value": torch.optim.Adam(
-                    self.critics[group][0].parameters(),
+                    critic_params,
                     lr=self.lr,
                 ),
             }
@@ -100,8 +105,10 @@ class GroupTrainer:
     def _ibmarl_value_loss(self, group: str, mb: TensorDictBase) -> torch.Tensor:
         """
         TD0 value loss with bootstrap proposal (IL vs RL) for next action.
-        Uses first critic only to match MADDPG/RLFD learning. Uses terminated
-        for bootstrap mask (no bootstrap on episode end), same as TorchRL convention.
+        Every ensemble member regresses against the same target y; members differ
+        only by initialisation, which is what makes the arbiter's min over a random
+        pair a real pessimistic estimate rather than noise. Uses terminated for the
+        bootstrap mask (no bootstrap on episode end), same as TorchRL convention.
         """
         obs = mb[(group, "observation")]
         act = mb[(group, "action")]
@@ -130,14 +137,24 @@ class GroupTrainer:
             batch_size=[obs.shape[0]],
             device=obs.device,
         )
-        critic = self.critics[group][0]
-        q = critic(td_cur)[(group, "state_action_value")]
-        return F.mse_loss(q, y)
+        # A fresh td per member: the critic TensorDictModule writes obs_action and
+        # state_action_value into whatever td it is handed, so reusing one across
+        # members would overwrite intermediates.
+        member_losses = [
+            F.mse_loss(critic(td_cur.clone())[(group, "state_action_value")], y)
+            for critic in self.critics[group]
+        ]
+        # Mean, not sum, so critic_loss stays on the same scale as the previous
+        # single-critic number and remains comparable across runs.
+        return torch.stack(member_losses).mean()
     
     def _ibmarl_actor_loss(self, group: str, mb: TensorDictBase) -> torch.Tensor:
         """
         MADDPG-style actor loss (same as RLFD): L_actor = -E[ Q(obs, pi(obs)) ].
-        Uses first critic only to match MADDPG/RLFD.
+        Deliberately scores against critic 0 alone rather than the ensemble: members
+        are trained on identical targets from identical minibatches, so the choice is
+        near-neutral, and keeping a single critic preserves parity with the
+        MADDPG/RLFD baselines this method is compared against.
         """
         obs = mb[(group, "observation")]
         B = obs.shape[0]

@@ -164,16 +164,20 @@ class IbmarlExperiment(BaseMARLExperiment):
                         actor_losses[group].append(actor_info["actor_loss"])
 
                         self.trainer.polyak_step(
-                            self.critics[group][0], self.target_critics[group][0]
+                            self.critics[group], self.target_critics[group]
                         )
                         self.trainer.polyak_step(
                             self.rl_policies[group], self.target_policies[group]
                         )
 
-                        self.noise_modules[group].step(current_frames)
-                        self.il_noise_modules[group].step(current_frames)
-
                         total_train_steps += 1
+
+                    # Anneal exploration noise once per iteration, not once per
+                    # optimiser step -- stepping inside the loop above advanced the
+                    # schedule by n_optimiser_steps * current_frames and saturated
+                    # sigma after a single iteration. Matches maddpg.py.
+                    self.noise_modules[group].step(current_frames)
+                    self.il_noise_modules[group].step(current_frames)
 
             # --- Dedicated evaluation (skip during warm-up) ---
             eval_means = None

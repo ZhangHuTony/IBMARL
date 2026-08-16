@@ -86,12 +86,19 @@ def _load_demonstrations_into_buffer(
     obs = torch.tensor(np.array(demo_data["obs"]), dtype=torch.float32)
     act = torch.tensor(np.array(demo_data["act"]), dtype=torch.float32)
     rew = torch.tensor(np.array(demo_data["rewards"]), dtype=torch.float32)
+    next_obs = torch.tensor(np.array(demo_data["next_obs"]), dtype=torch.float32)
+    dones = torch.tensor(np.array(demo_data["dones"]), dtype=torch.bool)
 
     if rew.ndim == 2:
         rew = rew.unsqueeze(-1)
 
     total_elements = obs.shape[0]
     n_agents = obs.shape[1]
+
+    # Episode ends in the demos come from the recorder's time limit, not true
+    # termination, so bootstrap through them: done=True, terminated=False.
+    done_agent = dones.view(-1, 1, 1).expand(total_elements, n_agents, 1)
+    terminated_agent = torch.zeros((total_elements, n_agents, 1), dtype=torch.bool)
 
     agents_data = TensorDict(
         {
@@ -102,21 +109,24 @@ def _load_demonstrations_into_buffer(
         batch_size=[total_elements, n_agents],
     )
 
-    next_agents_data = agents_data.clone()
-    next_agents_data.set(
-        "done",
-        torch.zeros((total_elements, n_agents, 1), dtype=torch.bool),
+    # Built fresh rather than cloned from agents_data: cloning silently carried
+    # the CURRENT observation into the next slot, making every demo transition a
+    # self-transition and poisoning the TD target.
+    next_agents_data = TensorDict(
+        {
+            "observation": next_obs,
+            "episode_reward": rew.clone(),
+            "done": done_agent.clone(),
+            "terminated": terminated_agent.clone(),
+            "reward": rew.clone(),
+        },
+        batch_size=[total_elements, n_agents],
     )
-    next_agents_data.set(
-        "terminated",
-        torch.zeros((total_elements, n_agents, 1), dtype=torch.bool),
-    )
-    next_agents_data.set("reward", rew.clone())
 
     next_td = TensorDict(
         {
             group: next_agents_data,
-            "done": torch.zeros((total_elements, 1), dtype=torch.bool),
+            "done": dones.view(-1, 1).clone(),
             "terminated": torch.zeros((total_elements, 1), dtype=torch.bool),
         },
         batch_size=[total_elements],

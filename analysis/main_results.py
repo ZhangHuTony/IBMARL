@@ -154,7 +154,7 @@ def main() -> None:
                 if not value:
                     continue
                 try:
-                    metric = "eval_reward_mean" if method_name[:6] == "ibmarl" else "eval_reward_mean"
+                    metric = "eval_reward_mean"
                     iterations, mean, stderr = load_metrics_for_method(value, metric=metric)
                     if N_WINDOW > 1:
                         kernel = np.ones(N_WINDOW) / N_WINDOW
