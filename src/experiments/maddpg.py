@@ -142,24 +142,50 @@ class MaddpgExperiment(BaseMARLExperiment):
         return critics
 
 
+    def _resume_modules(self):
+        modules = {}
+        for group in self.env.group_map.keys():
+            modules[f"loss_{group}"] = self.losses[group]
+            modules[f"policy_{group}"] = self.policies[group]
+            modules[f"critic_{group}"] = self.critics[group]
+            modules[f"opt_actor_{group}"] = self.optimisers[group]["loss_actor"]
+            modules[f"opt_value_{group}"] = self.optimisers[group]["loss_value"]
+            modules[f"noise_{group}"] = self.exploration_policies[group][-1]
+        return modules
+
+    def _resume_buffers(self):
+        return {f"replay_{g}": b for g, b in self.replay_buffers.items()}
+
     def train(self):
         print("Training MADDPG Experiment...")
-        
+
+        start_iteration, counters = self.begin_training(
+            {
+                "total_frames": 0,
+                "total_episodes": 0,
+                "total_train_steps": 0,
+                "elapsed": 0.0,
+            }
+        )
+
         pbar = tqdm(
             total= self.config.get('n_iters'),
+            initial=start_iteration,
             desc = ", ".join(
                 [f"episode_reward_mean_{group}=0" for group in self.env.group_map.keys()]
-            ), 
+            ),
         )
 
         train_group_map = copy.deepcopy(self.env.group_map)
 
         start_time = time.time()
-        total_frames = 0
-        total_episodes = 0
-        total_train_steps = 0
+        elapsed_offset = counters["elapsed"]
+        total_frames = counters["total_frames"]
+        total_episodes = counters["total_episodes"]
+        total_train_steps = counters["total_train_steps"]
 
-        for iteration, batch in enumerate(self.collector):
+        for offset, batch in enumerate(self.collector):
+            iteration = start_iteration + offset
             current_frames = batch.numel()
             total_frames += current_frames
             batch = self.process_batch(batch)
@@ -205,7 +231,7 @@ class MaddpgExperiment(BaseMARLExperiment):
             eval_means = self.evaluate(n_episodes=20)
 
             # --- Metrics ---
-            elapsed = time.time() - start_time
+            elapsed = elapsed_offset + (time.time() - start_time)
             speed = total_frames / max(elapsed, 1e-6)
 
             done_global = batch.get(("next", "done"))
@@ -237,6 +263,18 @@ class MaddpgExperiment(BaseMARLExperiment):
             if iteration % 10 == 0:
                 self.metrics_logger.save()
 
+            if (iteration + 1) % self.resume_interval == 0:
+                self.metrics_logger.save()
+                self.save_resume(
+                    iteration,
+                    {
+                        "total_frames": total_frames,
+                        "total_episodes": total_episodes,
+                        "total_train_steps": total_train_steps,
+                        "elapsed": elapsed,
+                    },
+                )
+
             pbar.set_description(
                 ", ".join(
                     [
@@ -250,6 +288,7 @@ class MaddpgExperiment(BaseMARLExperiment):
             pbar.update()
 
         self.metrics_logger.save()
+        self.clear_resume()
 
         first_group = list(self.env.group_map.keys())[0]
         recent = self.metrics_logger.get_values("episode_reward_mean", first_group)[-10:]
@@ -349,46 +388,19 @@ class MaddpgExperiment(BaseMARLExperiment):
                 )
         return batch
     
-    def render_policy(self):
-
+    def save_results(self):
+        """Also record a policy video, matching IBMARL's behaviour."""
+        super().save_results()
         try:
-            results_dir = self.render_path
+            self.render_policy()
+        except Exception as e:
+            print(f"Could not save policy video: {e}")
 
-            video_logger = CSVLogger(
-                exp_name="vmas_logs",
-                log_dir=str(results_dir),
-                video_format="mp4",
-            )
-
-            print("Creating rendering env")
-            env_with_render = TransformedEnv(self.env.base_env, self.env.transform.clone())
-
-            env_with_render = env_with_render.append_transform(
-                PixelRenderTransform(
-                    out_keys=["pixels"],
-                    preproc=lambda x: x.copy(),
-                    as_non_tensor=True,
-                    mode="rgb_array",
-                )
-            )
-
-            env_with_render = env_with_render.append_transform(
-                VideoRecorder(logger=video_logger, tag="vmas_rendered")
-            )
-
-            render_policy = TensorDictSequential(*self.policies.values())
-            render_policy.eval()
-
-            with torch.no_grad():
-                with set_exploration_type(ExplorationType.MODE):
-                    print("Rendering rollout...")
-                    env_with_render.rollout(500, policy=render_policy)
-
-            print("Saving video...")
-            env_with_render.transform.dump()
-
-            print("Saved! Video location:")
-            video_logger.print_log_dir()
-        
+    def render_policy(self):
+        if getattr(self, "_video_created", False):
+            return
+        self._video_created = True
+        try:
+            self._record_policy_video(self.policies, tag="policy")
         except Exception as e:
             print(f"Could not render policy: {e}")

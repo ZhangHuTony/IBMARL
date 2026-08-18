@@ -3,7 +3,7 @@
 #common parameters
 seed: 42
 frames_per_batch: 1000 #number of team frames collected per sampling iteration
-n_iters: 250 #number of sampling and training iterations
+n_iters: 300 #number of sampling and training iterations
 # n_iters: 150
 memory_size: 1000000 # replay buffer of each group can store this many frames
 sparse_rewards: True #whether to use sparse rewards

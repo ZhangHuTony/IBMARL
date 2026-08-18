@@ -64,28 +64,56 @@ class IbmarlExperiment(BaseMARLExperiment):
         self.trainer = GroupTrainer(config, self.rl_policies, self.critics, self.target_policies, self.target_critics, self.action_arbiter, self.env)
         self._rl_video_created = False
 
+    def _resume_modules(self):
+        modules = {}
+        for group in self.env.group_map.keys():
+            modules[f"rl_policy_{group}"] = self.rl_policies[group]
+            modules[f"critics_{group}"] = self.critics[group]
+            modules[f"target_policy_{group}"] = self.target_policies[group]
+            modules[f"target_critics_{group}"] = self.target_critics[group]
+            modules[f"opt_actor_{group}"] = self.trainer.optimisers[group]["loss_actor"]
+            modules[f"opt_value_{group}"] = self.trainer.optimisers[group]["loss_value"]
+            modules[f"noise_{group}"] = self.noise_modules[group]
+            modules[f"il_noise_{group}"] = self.il_noise_modules[group]
+        return modules
+
+    def _resume_buffers(self):
+        return {f"replay_{g}": b for g, b in self.replay_buffers.items()}
+
     def train(self) -> str:
         print("Training IBMARL Experiment...")
 
+        start_iteration, counters = self.begin_training(
+            {
+                "total_frames": 0,
+                "total_episodes": 0,
+                "total_train_steps": 0,
+                "elapsed": 0.0,
+            }
+        )
+
         pbar = tqdm(
             total= self.config.get('n_iters'),
+            initial=start_iteration,
             desc = ", ".join(
                 [f"episode_reward_mean_{group}=0" for group in self.env.group_map.keys()]
-            ), 
+            ),
         )
 
         train_group_map = copy.deepcopy(self.env.group_map)
 
         start_time = time.time()
-        total_frames = 0
-        total_episodes = 0
-        total_train_steps = 0
+        elapsed_offset = counters["elapsed"]
+        total_frames = counters["total_frames"]
+        total_episodes = counters["total_episodes"]
+        total_train_steps = counters["total_train_steps"]
 
         train_batch_size = self.config.get("training").get("train_batch_size")
         min_warm_up_frames = self.config.get("ibmarl_min_warm_up_frames", 5000)
         first_group = list(self.env.group_map.keys())[0]
 
-        for iteration, batch in enumerate(self.collector):
+        for offset, batch in enumerate(self.collector):
+            iteration = start_iteration + offset
 
             # --- Arbiter metrics from batch ---
             arbiter_metrics = {}
@@ -185,7 +213,7 @@ class IbmarlExperiment(BaseMARLExperiment):
                 eval_means = self.evaluate(n_episodes=20)
 
             # --- Metrics ---
-            elapsed = time.time() - start_time
+            elapsed = elapsed_offset + (time.time() - start_time)
             speed = total_frames / max(elapsed, 1e-6)
 
             done_global = batch.get(("next", "done"))
@@ -223,6 +251,18 @@ class IbmarlExperiment(BaseMARLExperiment):
             if iteration % 10 == 0:
                 self.metrics_logger.save()
 
+            if (iteration + 1) % self.resume_interval == 0:
+                self.metrics_logger.save()
+                self.save_resume(
+                    iteration,
+                    {
+                        "total_frames": total_frames,
+                        "total_episodes": total_episodes,
+                        "total_train_steps": total_train_steps,
+                        "elapsed": elapsed,
+                    },
+                )
+
             pbar.set_description(
                 ", ".join(
                     [
@@ -235,6 +275,7 @@ class IbmarlExperiment(BaseMARLExperiment):
             pbar.update()
 
         self.metrics_logger.save()
+        self.clear_resume()
 
         first_group = list(self.env.group_map.keys())[0]
         recent_rl_only = self.metrics_logger.get_values("rl_only_episode_reward_mean", first_group)[-10:]
@@ -264,76 +305,7 @@ class IbmarlExperiment(BaseMARLExperiment):
         if self._rl_video_created:
             return
         self._rl_video_created = True
-
-        import imageio.v3 as iio
-
-        videos_dir = Path(self.config["videos_dir"])
-        videos_dir.mkdir(parents=True, exist_ok=True)
-
-        video_logger = CSVLogger(
-            exp_name="vmas_logs",
-            log_dir=str(videos_dir),
-            video_format="mp4",
-        )
-
-        print("Creating rendering env for RL policy video...")
-        env_with_render = TransformedEnv(self.env.base_env, self.env.transform.clone())
-        env_with_render = env_with_render.append_transform(
-            PixelRenderTransform(
-                out_keys=["pixels"],
-                preproc=lambda x: x.copy(),
-                as_non_tensor=True,
-                mode="rgb_array",
-            )
-        )
-        env_with_render = env_with_render.append_transform(
-            VideoRecorder(logger=video_logger, tag="rl_policy")
-        )
-
-        rl_policy = TensorDictSequential(*self.rl_policies.values())
-        rl_policy.eval()
-
-        with torch.no_grad():
-            with set_exploration_type(ExplorationType.MODE):
-                print("Rendering RL policy rollout...")
-                env_with_render.rollout(100, policy=rl_policy)
-
-        print("Saving video...")
-        env_with_render.transform.dump()
-
-        mp4_patterns = [
-            videos_dir / "vmas_logs" / "video_rl_policy_*.mp4",
-            videos_dir / "video_rl_policy_*.mp4",
-        ]
-        mp4_path = None
-        for pattern in mp4_patterns:
-            matches = sorted(pattern.parent.glob(pattern.name))
-            if matches:
-                mp4_path = matches[-1]
-                break
-        if mp4_path is None:
-            matches = list(videos_dir.rglob("video_*.mp4"))
-            if matches:
-                mp4_path = sorted(matches)[-1]
-
-        if mp4_path is not None and mp4_path.exists():
-            final_mp4 = videos_dir / "rl_policy.mp4"
-            if mp4_path != final_mp4:
-                import shutil
-                shutil.copy(mp4_path, final_mp4)
-            print(f"Saved RL policy video to: {final_mp4.resolve()}")
-
-            gif_path = videos_dir / "rl_policy.gif"
-            try:
-                frames = iio.imread(str(final_mp4), index=None)
-                step = max(1, len(frames) // 60)
-                frames_sub = frames[::step]
-                iio.imwrite(str(gif_path), frames_sub, duration=step / 30.0, loop=0)
-                print(f"Saved RL policy GIF to: {gif_path.resolve()}")
-            except Exception as e:
-                print(f"Warning: Could not create GIF: {e}")
-        else:
-            print("Warning: Could not find saved mp4 file for GIF conversion")
+        self._record_policy_video(self.rl_policies, tag="rl_policy")
 
     def render_policy(self):
         """Render the RL policy only (not combined IL/RL). Uses _create_rl_policy_video_and_gif."""

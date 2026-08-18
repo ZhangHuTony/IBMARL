@@ -170,13 +170,29 @@ class RlfdExperiment(MaddpgExperiment):
         self.demo_replay_buffers = demo_buffers
         self.replay_buffers = online_buffers
 
+    def _resume_buffers(self):
+        buffers = super()._resume_buffers()
+        # The demo buffer is rebuilt deterministically from disk at construction,
+        # so it does not need dumping -- only the online buffer carries run state.
+        return buffers
+
     def train(self):
         print("Training RLfD Experiment (MADDPG + demo sampling)...")
 
         from tqdm import tqdm
 
+        start_iteration, counters = self.begin_training(
+            {
+                "total_frames": 0,
+                "total_episodes": 0,
+                "total_train_steps": 0,
+                "elapsed": 0.0,
+            }
+        )
+
         pbar = tqdm(
             total=self.config.get("n_iters"),
+            initial=start_iteration,
             desc=", ".join(
                 [f"episode_reward_mean_{group}=0" for group in self.env.group_map.keys()]
             ),
@@ -188,11 +204,13 @@ class RlfdExperiment(MaddpgExperiment):
         train_batch_size = self.config.get("training").get("train_batch_size")
 
         start_time = time.time()
-        total_frames = 0
-        total_episodes = 0
-        total_train_steps = 0
+        elapsed_offset = counters["elapsed"]
+        total_frames = counters["total_frames"]
+        total_episodes = counters["total_episodes"]
+        total_train_steps = counters["total_train_steps"]
 
-        for iteration, batch in enumerate(self.collector):
+        for offset, batch in enumerate(self.collector):
+            iteration = start_iteration + offset
             current_frames = batch.numel()
             total_frames += current_frames
             batch = self.process_batch(batch)
@@ -265,7 +283,7 @@ class RlfdExperiment(MaddpgExperiment):
             eval_means = self.evaluate(n_episodes=20)
 
             # --- Metrics ---
-            elapsed = time.time() - start_time
+            elapsed = elapsed_offset + (time.time() - start_time)
             speed = total_frames / max(elapsed, 1e-6)
 
             done_global = batch.get(("next", "done"))
@@ -298,6 +316,18 @@ class RlfdExperiment(MaddpgExperiment):
             if iteration % 10 == 0:
                 self.metrics_logger.save()
 
+            if (iteration + 1) % self.resume_interval == 0:
+                self.metrics_logger.save()
+                self.save_resume(
+                    iteration,
+                    {
+                        "total_frames": total_frames,
+                        "total_episodes": total_episodes,
+                        "total_train_steps": total_train_steps,
+                        "elapsed": elapsed,
+                    },
+                )
+
             pbar.set_description(
                 ", ".join(
                     [
@@ -311,6 +341,7 @@ class RlfdExperiment(MaddpgExperiment):
             pbar.update()
 
         self.metrics_logger.save()
+        self.clear_resume()
 
         first_group = list(self.env.group_map.keys())[0]
         recent = self.metrics_logger.get_values("episode_reward_mean", first_group)[-10:]

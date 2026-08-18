@@ -7,10 +7,12 @@ from abc import abstractmethod
 import numpy as np
 
 from tensordict.nn import TensorDictSequential
-from torchrl.envs import ExplorationType, set_exploration_type
+from torchrl.envs import ExplorationType, TransformedEnv, set_exploration_type
+from torchrl.record import CSVLogger, PixelRenderTransform, VideoRecorder
 
 from src.environment.make_env import make_env
 from src.util.metrics_logger import MetricsLogger
+from src.util.checkpointing import ResumeMixin
 
 from pathlib import Path
 import matplotlib
@@ -18,7 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-class BaseMARLExperiment:
+class BaseMARLExperiment(ResumeMixin):
 
     def __init__(self, config):
         self.config = config
@@ -26,11 +28,38 @@ class BaseMARLExperiment:
         self._setup_seed()
 
         self.env = make_env(config, self.device)
+        self._eval_env = None
         self.render_path = config['videos_dir']
         self.experiment_type = config['exp_type']
 
         data_dir = Path(config["data_dir"])
         self.metrics_logger = MetricsLogger(data_dir / "metrics.csv")
+
+    @property
+    def eval_env(self):
+        """
+        Dedicated environment for evaluation rollouts and video rendering.
+
+        VMAS environments are stateful, so rolling out ``self.env`` -- the env
+        the SyncDataCollector is driving -- resets its step counter and world
+        state mid-run.  That desynchronises the collector from the simulator:
+        the batch collected after an eval starts from a stale cached
+        observation, and its first frame fires ``done`` immediately, logging a
+        1-step episode (the ``episode_reward_mean = -1.0`` spike).  Evaluating
+        in a separate env leaves the collector's trajectory untouched.
+
+        Seeded off the training seed so eval episodes are not drawn from the
+        same reset sequence as the training episodes, while staying
+        reproducible and identical across variants at the same seed.
+
+        Built on first use so eval-only experiments that never drive a
+        collector don't pay for a second simulator.
+        """
+        if self._eval_env is None:
+            eval_config = dict(self.config)
+            eval_config["seed"] = self.config.get("seed", 0) + 10_000
+            self._eval_env = make_env(eval_config, self.device)
+        return self._eval_env
 
     def _setup_device(self):
         device = (
@@ -48,10 +77,38 @@ class BaseMARLExperiment:
             torch.cuda.manual_seed_all(self.seed)
         print(f"Setting seed to: {self.config.get('seed', None)}")
 
+    @staticmethod
+    def _agent_done_mask(td, group: str, reference) -> torch.Tensor:
+        """
+        Per-agent episode-end mask shaped like *reference* (the episode_reward
+        tensor, [..., n_agents, 1]).
+
+        A raw ``env.rollout`` output only carries the global ``("next", "done")``
+        key -- the per-group key is added by ``process_batch`` on collector
+        batches, not here.  Reading ``("next", group, "done")`` off a rollout
+        therefore returns None, and ``tensor[None]`` silently inserts an axis
+        instead of masking, which is why this has to be built explicitly.
+        """
+        done = td.get(("next", group, "done"), None)
+        if done is None:
+            done = td.get(("next", "done"))
+            n_agents = reference.shape[-2]
+            done = done.unsqueeze(-2).expand(*done.shape[:-1], n_agents, 1)
+        return done
+
     def evaluate(self, n_episodes: int = 20) -> dict:
         """
         Deterministic evaluation: run the learned policy (no exploration noise)
-        for *n_episodes* complete episodes and return mean episode reward per group.
+        and return the mean *completed-episode* return per group.
+
+        Runs in ``self.eval_env``, never in ``self.env`` -- see the ``eval_env``
+        docstring for why sharing the collector's env corrupts training data.
+
+        The environment is vectorised over ``frames_per_batch // horizon`` VMAS
+        sub-environments, so one rollout yields that many episodes; rollouts are
+        repeated until at least *n_episodes* have finished.  Returns are recorded
+        per agent (matching ``episode_reward_mean``), i.e. an episode with N
+        agents contributes N samples to the mean.
 
         Uses self.rl_policies (IBMARL) or self.policies (MADDPG / RLFD / RFT).
         """
@@ -62,23 +119,27 @@ class BaseMARLExperiment:
         eval_policy = TensorDictSequential(*policies.values())
         eval_policy.eval()
 
+        env = self.eval_env
         horizon = self.config.get("horizon", 100)
-        max_steps = horizon * (n_episodes + 5)
+        n_envs = max(int(env.batch_size[0]) if len(env.batch_size) else 1, 1)
+        n_rollouts = max(1, -(-n_episodes // n_envs))  # ceil
 
+        returns = {group: [] for group in env.group_map.keys()}
         with torch.no_grad():
             with set_exploration_type(ExplorationType.MODE):
-                out = self.env.rollout(max_steps, policy=eval_policy)
+                for _ in range(n_rollouts):
+                    out = env.rollout(horizon, policy=eval_policy)
+                    for group in env.group_map.keys():
+                        ep_reward = out.get(("next", group, "episode_reward"))
+                        done = self._agent_done_mask(out, group, ep_reward)
+                        returns[group].append(ep_reward[done].float())
 
         mean_reward_by_group = {}
-        for group in self.env.group_map.keys():
-            done = out.get(("next", group, "done"))
-            episode_rewards = out.get(("next", group, "episode_reward"))[done]
-            if episode_rewards.numel() == 0:
-                mean_reward_by_group[group] = 0.0
-                continue
-            n = min(n_episodes, episode_rewards.shape[0])
-            mean_reward_by_group[group] = episode_rewards[:n].float().mean().item()
-
+        for group, chunks in returns.items():
+            vals = torch.cat(chunks) if chunks else torch.empty(0)
+            mean_reward_by_group[group] = (
+                vals.mean().item() if vals.numel() > 0 else 0.0
+            )
         return mean_reward_by_group
 
     def save_results(self):
@@ -154,6 +215,84 @@ class BaseMARLExperiment:
         checkpoint_path = check_dir / "policy_checkpoint.pt"
         torch.save(state_dicts, checkpoint_path)
         print(f"Saved policy checkpoint to: {checkpoint_path.resolve()}")
+
+    def _record_policy_video(self, policies: dict, tag: str = "policy"):
+        """
+        Roll out *policies* deterministically in a rendering copy of the env and
+        write ``<videos_dir>/<tag>.mp4`` plus ``<tag>.gif``.
+
+        Shared by every experiment so the baselines and IBMARL produce videos
+        under the same names. TorchRL's CSVLogger picks its own filename and
+        nesting (currently ``vmas_logs/videos/<tag>_0.mp4``), so the finished
+        file is located by taking the newest .mp4 under videos_dir rather than
+        by matching a fixed pattern.
+
+        Built on ``self.eval_env``'s base env rather than ``self.env``'s: the
+        rendering rollout steps whichever simulator it wraps, which would
+        desynchronise the collector if it wrapped the training env.
+        """
+        import shutil
+
+        import imageio.v3 as iio
+
+        videos_dir = Path(self.config["videos_dir"])
+        videos_dir.mkdir(parents=True, exist_ok=True)
+
+        video_logger = CSVLogger(
+            exp_name="vmas_logs", log_dir=str(videos_dir), video_format="mp4"
+        )
+
+        print(f"Creating rendering env for {tag} video...")
+        env_with_render = TransformedEnv(
+            self.eval_env.base_env, self.eval_env.transform.clone()
+        )
+        env_with_render = env_with_render.append_transform(
+            PixelRenderTransform(
+                out_keys=["pixels"],
+                preproc=lambda x: x.copy(),
+                as_non_tensor=True,
+                mode="rgb_array",
+            )
+        )
+        env_with_render = env_with_render.append_transform(
+            VideoRecorder(logger=video_logger, tag=tag)
+        )
+
+        policy = TensorDictSequential(*policies.values())
+        policy.eval()
+
+        horizon = self.config.get("horizon", 100)
+        with torch.no_grad():
+            with set_exploration_type(ExplorationType.MODE):
+                print(f"Rendering {tag} rollout...")
+                env_with_render.rollout(horizon, policy=policy)
+
+        env_with_render.transform.dump()
+
+        final_mp4 = videos_dir / f"{tag}.mp4"
+        candidates = [p for p in videos_dir.rglob("*.mp4") if p != final_mp4]
+        mp4_path = (
+            max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+        )
+
+        if mp4_path is None or not mp4_path.exists():
+            print(f"Warning: no mp4 produced for {tag}")
+            return
+
+        if mp4_path != final_mp4:
+            shutil.copy(mp4_path, final_mp4)
+        print(f"Saved {tag} video to: {final_mp4.resolve()}")
+
+        gif_path = videos_dir / f"{tag}.gif"
+        try:
+            frames = iio.imread(str(final_mp4), index=None)
+            step = max(1, len(frames) // 60)
+            iio.imwrite(
+                str(gif_path), frames[::step], duration=step / 30.0, loop=0
+            )
+            print(f"Saved {tag} GIF to: {gif_path.resolve()}")
+        except Exception as e:
+            print(f"Warning: Could not create GIF for {tag}: {e}")
 
     def render_policy(self):
         raise NotImplementedError

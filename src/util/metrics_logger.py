@@ -35,6 +35,16 @@ class MetricsLogger:
                 row[key] = value
         self._rows.append(row)
 
+    def restore(self, rows: list[dict], columns: list[str]) -> None:
+        """
+        Reinstate previously logged rows (used when resuming a run) so the
+        final CSV covers the whole run rather than only the resumed tail.
+        """
+        self._rows = [dict(r) for r in rows]
+        for col in columns:
+            if col not in self._columns:
+                self._columns.append(col)
+
     def save(self) -> None:
         """Write all accumulated rows to CSV (full rewrite)."""
         with open(self.path, "w", newline="") as f:

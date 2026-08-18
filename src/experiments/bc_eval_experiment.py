@@ -55,25 +55,48 @@ class BcEvalExperiment(BaseMARLExperiment):
 
         self._bc_td_policy.eval()
 
+        n_envs = max(int(self.env.batch_size[0]) if len(self.env.batch_size) else 1, 1)
+        n_rollouts = max(1, -(-n_episodes // n_envs))  # ceil
+
+        collected = {group: [] for group in self.env.group_map}
         with torch.no_grad():
             with set_exploration_type(ExplorationType.DETERMINISTIC):
-                out = self.env.rollout(max_steps, policy=self._bc_td_policy)
+                for _ in range(n_rollouts):
+                    out = self.env.rollout(horizon, policy=self._bc_td_policy)
+                    for group in self.env.group_map:
+                        ep_reward = out.get(("next", group, "episode_reward"))
+                        done = self._agent_done_mask(out, group, ep_reward)
+                        collected[group].append(ep_reward[done].float())
 
         lines = []
         for group in self.env.group_map:
-            done = out.get(("next", group, "done"))
-            ep_rewards = out.get(("next", group, "episode_reward"))[done]
+            ep_rewards = (
+                torch.cat(collected[group]) if collected[group] else torch.empty(0)
+            )
             if ep_rewards.numel() == 0:
                 mean_r = 0.0
                 n_completed = 0
             else:
                 n_completed = ep_rewards.shape[0]
-                n = min(n_episodes, n_completed)
-                mean_r = ep_rewards[:n].float().mean().item()
+                mean_r = ep_rewards.mean().item()
+
+            std = ep_rewards.std().item() if ep_rewards.numel() > 1 else 0.0
+            sem = std / (n_completed ** 0.5) if n_completed > 1 else 0.0
+
+            # Logged so the IL reference line is a file on disk like every other
+            # result, rather than a number that only exists in a console log.
+            self.metrics_logger.log(
+                iteration=0,
+                group=group,
+                eval_reward_mean=mean_r,
+                eval_reward_std=round(std, 6),
+                eval_reward_sem=round(sem, 6),
+                n_agent_episodes=n_completed,
+            )
 
             msg = (
-                f"  {group:>20s}:  mean_reward = {mean_r:+.4f}  "
-                f"(episodes completed: {n_completed})"
+                f"  {group:>20s}:  mean_reward = {mean_r:+.4f} +/- {sem:.4f} "
+                f"(agent-episodes: {n_completed})"
             )
             print(msg)
             lines.append(msg)
@@ -82,7 +105,10 @@ class BcEvalExperiment(BaseMARLExperiment):
         return "BC eval complete.\n" + "\n".join(lines)
 
     def save_results(self):
-        pass
+        # Metrics only: there is no policy to checkpoint and no learning curve
+        # to plot, so the base implementation does not apply.
+        self.metrics_logger.save()
+        print(f"Saved metrics to: {self.metrics_logger.path.resolve()}")
 
     def save_checkpoint(self):
         pass
