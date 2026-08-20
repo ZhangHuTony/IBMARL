@@ -7,7 +7,7 @@ from abc import abstractmethod
 import numpy as np
 
 from tensordict.nn import TensorDictSequential
-from torchrl.envs import ExplorationType, TransformedEnv, set_exploration_type
+from torchrl.envs import ExplorationType, set_exploration_type
 from torchrl.record import CSVLogger, PixelRenderTransform, VideoRecorder
 
 from src.environment.make_env import make_env
@@ -128,7 +128,18 @@ class BaseMARLExperiment(ResumeMixin):
         with torch.no_grad():
             with set_exploration_type(ExplorationType.MODE):
                 for _ in range(n_rollouts):
-                    out = env.rollout(horizon, policy=eval_policy)
+                    # break_when_any_done=False is required for correctness, not
+                    # just completeness.  The default stops the rollout at the
+                    # FIRST sub-env to finish, and only episodes that have ended
+                    # are counted below -- so a policy that solves the task has
+                    # its slower episodes systematically discarded and scores
+                    # too well.  Measured on ibmarl/seed_0: -19.42 from 87 of
+                    # 630 agent-episodes, versus -21.46 from all 630.  It also
+                    # restores the n_rollouts arithmetic, which assumes each
+                    # rollout yields one episode per sub-env.
+                    out = env.rollout(
+                        horizon, policy=eval_policy, break_when_any_done=False
+                    )
                     for group in env.group_map.keys():
                         ep_reward = out.get(("next", group, "episode_reward"))
                         done = self._agent_done_mask(out, group, ep_reward)
@@ -227,9 +238,19 @@ class BaseMARLExperiment(ResumeMixin):
         file is located by taking the newest .mp4 under videos_dir rather than
         by matching a fixed pattern.
 
-        Built on ``self.eval_env``'s base env rather than ``self.env``'s: the
-        rendering rollout steps whichever simulator it wraps, which would
-        desynchronise the collector if it wrapped the training env.
+        Rendered in a *dedicated single-sub-env* simulator, not in ``self.env``
+        or ``self.eval_env``:
+
+        * Stepping the training env here would desynchronise the collector, the
+          same way a shared eval env does (see the ``eval_env`` docstring).
+        * ``rollout`` stops as soon as *any* sub-env is done, but
+          ``PixelRenderTransform`` only ever draws sub-env 0.  On a vectorised
+          env the recording therefore ended at the earliest finisher across all
+          sub-envs while the agent on screen was still mid-episode -- which is
+          why trained (goal-reaching) policies produced 13-25 frame videos
+          while policies that never succeed always ran the full horizon.  With
+          one sub-env the two coincide: the video ends exactly when the episode
+          being watched ends.
         """
         import shutil
 
@@ -243,9 +264,11 @@ class BaseMARLExperiment(ResumeMixin):
         )
 
         print(f"Creating rendering env for {tag} video...")
-        env_with_render = TransformedEnv(
-            self.eval_env.base_env, self.eval_env.transform.clone()
-        )
+        horizon = self.config.get("horizon", 100)
+        render_config = dict(self.config)
+        render_config["seed"] = self.config.get("seed", 0) + 20_000
+        render_config["frames_per_batch"] = horizon  # -> exactly one sub-env
+        env_with_render = make_env(render_config, self.device)
         env_with_render = env_with_render.append_transform(
             PixelRenderTransform(
                 out_keys=["pixels"],
@@ -254,14 +277,16 @@ class BaseMARLExperiment(ResumeMixin):
                 mode="rgb_array",
             )
         )
+        # skip=1: record every step.  The default (2) halves the frame rate,
+        # which is harmless over a 100-step timeout but turns a 30-step success
+        # into a 15-frame flash.
         env_with_render = env_with_render.append_transform(
-            VideoRecorder(logger=video_logger, tag=tag)
+            VideoRecorder(logger=video_logger, tag=tag, skip=1)
         )
 
         policy = TensorDictSequential(*policies.values())
         policy.eval()
 
-        horizon = self.config.get("horizon", 100)
         with torch.no_grad():
             with set_exploration_type(ExplorationType.MODE):
                 print(f"Rendering {tag} rollout...")
@@ -281,11 +306,28 @@ class BaseMARLExperiment(ResumeMixin):
 
         if mp4_path != final_mp4:
             shutil.copy(mp4_path, final_mp4)
+
+        # A solved episode ends on the frame the agents arrive, which reads as a
+        # cut-off clip even though it is complete.  Hold the last frame so the
+        # final configuration is actually visible.
+        hold = 20
+        try:
+            frames = list(iio.imread(str(final_mp4), index=None))
+            frames = frames + [frames[-1]] * hold
+            # Written to a sibling first: imageio cannot encode into a path it
+            # is still holding open for reading.
+            padded = final_mp4.with_suffix(".padded.mp4")
+            iio.imwrite(str(padded), frames, fps=30, codec="libx264")
+            padded.replace(final_mp4)
+        except Exception as e:
+            print(f"Warning: could not pad {tag} video ({e}); keeping unpadded")
+            frames = None
         print(f"Saved {tag} video to: {final_mp4.resolve()}")
 
         gif_path = videos_dir / f"{tag}.gif"
         try:
-            frames = iio.imread(str(final_mp4), index=None)
+            if frames is None:
+                frames = list(iio.imread(str(final_mp4), index=None))
             step = max(1, len(frames) // 60)
             iio.imwrite(
                 str(gif_path), frames[::step], duration=step / 30.0, loop=0

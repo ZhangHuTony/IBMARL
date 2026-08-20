@@ -37,6 +37,9 @@ VARIANTS: dict[str, tuple[str, dict]] = {
     "ibmarl_hard": ("ibmarl", {"soft": False}),
     # single critic instead of the 3-member ensemble
     "ibmarl_1critic": ("ibmarl", {"num_critics": 1}),
+    # one-factor ablations of the strict (joint-choice) main method
+    "ibmarl_strict_hard": ("ibmarl", {"strict": True, "soft": False}),
+    "ibmarl_strict_1critic": ("ibmarl", {"strict": True, "num_critics": 1}),
     # --- reference ---
     # bc_eval.yaml still points at a collaborator's home dir; reuse the same
     # R2BC checkpoint the demo-based methods are given.

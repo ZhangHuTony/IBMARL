@@ -62,7 +62,16 @@ class BcEvalExperiment(BaseMARLExperiment):
         with torch.no_grad():
             with set_exploration_type(ExplorationType.DETERMINISTIC):
                 for _ in range(n_rollouts):
-                    out = self.env.rollout(horizon, policy=self._bc_td_policy)
+                    # See BaseMARLExperiment.evaluate: the default stops at the
+                    # first sub-env to finish and only ended episodes are
+                    # counted, which discards the slower ones.  Barely moves the
+                    # BC number (it rarely reaches the goal) but keeps this on
+                    # the same measurement protocol as every other variant.
+                    out = self.env.rollout(
+                        horizon,
+                        policy=self._bc_td_policy,
+                        break_when_any_done=False,
+                    )
                     for group in self.env.group_map:
                         ep_reward = out.get(("next", group, "episode_reward"))
                         done = self._agent_done_mask(out, group, ep_reward)
