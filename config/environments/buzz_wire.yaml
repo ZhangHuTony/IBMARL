@@ -1,4 +1,5 @@
-# Navigation environment configuration
+# Buzz-wire environment configuration (sparse fixed-horizon variant via
+# SparseRewardBuzzWireScenario - see src/environment/scenarios/buzz_wire_sparse.py)
 
 #Inherit from the base configuration
 extends: "../base.yaml"
@@ -6,3 +7,31 @@ extends: "../base.yaml"
 # Environment specific parameters
 n_agents: 2
 horizon: 200
+# 40 VMAS sub-envs x 200 steps (num_vmas_env = frames_per_batch // horizon).
+# Must live in this file: load_config computes total_frames = frames_per_batch *
+# n_iters right after the environment merge. 8000 x 75 iters = 600k env steps --
+# the same budget as the 2000 x 300 pilot, collected in 4x fewer sequential
+# batched steps. The GPU is launch-bound here: a batched step costs the same at
+# 10, 20, 40 or 80 sub-envs (measured 67.0/67.4/67.4/67.0 ms), so widening the
+# batch is very nearly free wall-time.
+frames_per_batch: 8000
+n_iters: 75
+# Evaluate every 4th iteration (plus the final one) = 20 evals over 600k steps.
+# Eval is ~64% of an iteration on buzz_wire (400 sequential env steps vs
+# collection's 200) and is side-effect-free, so this buys wall time at the cost
+# of curve resolution only. Wider sub-env batch also means one eval rollout now
+# yields 40 episodes instead of 20 -- better statistics, half the rollouts.
+eval_interval: 4
+# Sparse basin radius on ||ball - goal||: 10x the native success predicate
+# (0.01), below the corridor half-width (0.125) so "inside" means "at the goal".
+# Baked into the recorded demonstration rewards - changing it requires
+# re-collecting demos in R2BC with the matching threshold.
+gt_radius: 0.1
+
+# UTD parity with the pilot: 8000 frames/iter x 0.25 = 2000 optimiser steps,
+# i.e. 75 x 2000 = 150,000 total gradient steps, identical to 300 x 500. The
+# learner is deliberately untouched otherwise (train_batch_size 1024,
+# polyak_tau 0.001 stepped once per optimiser step) -- widening the batch would
+# have cut the number of updates and the pilot only took off after ~50k of them.
+training:
+  n_optimiser_steps: 2000

@@ -1,0 +1,4 @@
+# Balance-specific overlay for RLfD -- the same demos IBMARL bootstraps from.
+# Without this, rlfd.yaml's navigation demos (18-dim obs) would be loaded into a
+# 16-dim balance buffer.
+demonstrations_path: "/home/tony-zhang/Research/R2BC/results/balance_r2bc_decent_20260823_185058/demonstrations.pt"

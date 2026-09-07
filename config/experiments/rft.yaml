@@ -6,7 +6,7 @@
 extends: "../base.yaml"
 
 # Path to demonstrations file used ONLY for the BC loss
-demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_201300/demonstrations.pt"
+demonstrations_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/navigation_r2bc_decent_20260129_201300/demonstrations.pt"
 
 rft:
   # Alpha in alpha * lambda(t) * L_BC

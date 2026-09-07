@@ -4,6 +4,7 @@ Registry for custom environment transforms.
 
 from src.environment.transforms.navigation_sparse import NavigationSparseReward
 from src.environment.transforms.balance_sparse import BalanceSparseReward
+from src.environment.transforms.transport_sparse import TransportSparseReward
 
 def build_transforms(config: dict):
     """
@@ -14,6 +15,11 @@ def build_transforms(config: dict):
 
     transforms = []
     transform_repr = []
+
+    # NOTE: buzz_wire's sparse reward is NOT a transform - the ball position it
+    # needs is absent from the observation, so it lives at scenario level
+    # (src/environment/scenarios/buzz_wire_sparse.py via resolve_scenario in
+    # make_env.py); buzz_wire intentionally has no branch here.
 
     if scenario == "navigation" and sparse_rewards:
         transform_repr.append("NavigationSparseReward")
@@ -31,6 +37,16 @@ def build_transforms(config: dict):
             BalanceSparseReward(
                 group="agents",
                 success_threshold=config.get("gt_radius"),
+            )
+        )
+    elif scenario == "transport" and sparse_rewards:
+        transform_repr.append("TransportSparseReward")
+        transforms.append(
+            TransportSparseReward(
+                group="agents",
+                # Success is the package's on_goal flag, not a distance
+                # threshold, so there is no gt_radius to pass here.
+                n_packages=config.get("n_packages", 1),
             )
         )
     print("Transformations added to environment:", transform_repr) 

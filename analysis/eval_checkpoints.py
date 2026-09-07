@@ -34,11 +34,24 @@ wall clock to a new sweep.
 Note this does NOT rehabilitate the old runs: those policies were still trained
 on corrupted data.  It measures what they actually achieve, nothing more.
 
+Protocols
+---------
+IBMARL has two evaluation protocols and this script can measure either:
+
+  ``rl``     the RL actors alone -- what every run predating the protocol change
+             logged, and the only thing the baselines have.
+  ``rl_il``  the arbitrated RL+IL policy, i.e. the critic picking greedily
+             between the teacher's action and the RL actor's.  Needs
+             ``checkpoints/critic_checkpoint.pt`` and a readable teacher, so it
+             is skipped with a warning for runs that predate the change or whose
+             config points at a teacher path that no longer exists.
+
 Usage
 -----
     python -m analysis.eval_checkpoints                      # results/paper
     python -m analysis.eval_checkpoints --episodes 500
     python -m analysis.eval_checkpoints --only ibmarl,maddpg
+    python -m analysis.eval_checkpoints --protocol rl_il
 """
 
 from __future__ import annotations
@@ -53,7 +66,7 @@ from statistics import mean, stdev
 import torch
 import yaml
 
-from src.experiments.base_marl_experiment import BaseMARLExperiment
+from src.experiments.base_marl_experiment import BaseMARLExperiment, vmas_rng_guard
 
 
 class _CheckpointEvaluator(BaseMARLExperiment):
@@ -89,12 +102,81 @@ def _build_policies(exp_type: str, cfg: dict, env, device) -> dict:
     raise ValueError(f"no policy builder for exp_type={exp_type!r}")
 
 
-def _last_logged_eval(run_dir: Path) -> dict:
-    """Final logged ``eval_reward_mean`` per group, i.e. column (a)."""
+def _build_ibmarl_eval_policies(cfg: dict, run_dir: Path, env, device, rl_policies):
+    """
+    Rebuild the arbitrated RL+IL policy for one IBMARL run, or None.
+
+    Needs two artifacts beyond the actor checkpoint: the critic ensemble the
+    arbiter scores with, and the frozen teacher it scores against.  Either can
+    be absent -- runs predating the protocol change have no
+    ``critic_checkpoint.pt``, and older configs carry absolute teacher paths from
+    a machine or a directory layout that no longer exists -- so both are checked
+    and a miss is a warning, not a failure.
+    """
+    from src.experiments.ibmarl.arbiter import ActionArbiter
+    from src.experiments.ibmarl.modules import build_eval_policies
+    from src.experiments.ibmarl.networks import (
+        R2bcPolicy,
+        build_critics,
+        build_targets,
+    )
+
+    critic_path = run_dir / "checkpoints" / "critic_checkpoint.pt"
+    if not critic_path.exists():
+        print(f"  skip rl_il for {run_dir}: no critic_checkpoint.pt")
+        return None
+
+    teacher_path = Path(cfg.get("r2bc_checkpoint_path", ""))
+    if not teacher_path.is_file():
+        print(f"  skip rl_il for {run_dir}: teacher not readable at {teacher_path}")
+        return None
+
+    il_policy = R2bcPolicy(teacher_path, env, device)
+    critics = build_critics(cfg, env, device)
+    target_policies, target_critics = build_targets(rl_policies, critics, env)
+
+    state = torch.load(critic_path, map_location=device, weights_only=False)
+    missing = set(target_critics) - set(state.get("target_critics", {}))
+    if missing:
+        raise RuntimeError(f"{run_dir}: critic checkpoint missing groups {missing}")
+    for group, ensemble in target_critics.items():
+        ensemble.load_state_dict(state["target_critics"][group])
+    for group, ensemble in critics.items():
+        if group in state.get("critics", {}):
+            ensemble.load_state_dict(state["critics"][group])
+
+    # target_rl_policy is only read by the bootstrap path, which greedy
+    # arbitration never enters; pass the real thing anyway so nothing quietly
+    # depends on the argument being unused.
+    arbiter = ActionArbiter(
+        cfg,
+        il_policy,
+        rl_policies,
+        target_policies,
+        critics,
+        target_critics,
+        env,
+        device,
+        il_noise_modules=None,
+    )
+    return build_eval_policies(arbiter, rl_policies, env)
+
+
+def _last_logged_eval(run_dir: Path) -> tuple[dict, str | None]:
+    """
+    Final logged ``eval_reward_mean`` per group, i.e. column (a), plus the
+    protocol it was measured under.
+
+    ``eval_protocol`` was added with the RL+IL protocol; a run without that
+    column predates the change and its ``eval_reward_mean`` is RL-only.  Without
+    this the ``delta`` below would silently compare an RL-only re-eval against an
+    RL+IL logged value.
+    """
     metrics = run_dir / "data" / "metrics.csv"
     if not metrics.exists():
-        return {}
+        return {}, None
     latest: dict[str, float] = {}
+    protocol = None
     with metrics.open() as f:
         for row in csv.DictReader(f):
             raw = (row.get("eval_reward_mean") or "").strip()
@@ -102,11 +184,14 @@ def _last_logged_eval(run_dir: Path) -> dict:
                 try:
                     latest[row["group"]] = float(raw)
                 except ValueError:
-                    pass
-    return latest
+                    continue
+                protocol = (row.get("eval_protocol") or "").strip() or "rl"
+    return latest, protocol
 
 
-def _evaluate_run(run_dir: Path, n_episodes: int, scratch: Path) -> dict | None:
+def _evaluate_run(
+    run_dir: Path, n_episodes: int, scratch: Path, protocol: str
+) -> dict | None:
     """Re-measure one run's final checkpoint.  Returns None if not evaluable."""
     cfg_path = run_dir / "config.yaml"
     if not cfg_path.exists():
@@ -128,6 +213,7 @@ def _evaluate_run(run_dir: Path, n_episodes: int, scratch: Path) -> dict | None:
 
     exp = _CheckpointEvaluator(cfg)
 
+    eval_policies = None
     if exp_type == "bc_eval":
         # No checkpoint of its own: bc_eval evaluates the frozen R2BC policy.
         from src.experiments.bc_eval_experiment import BcEvalExperiment
@@ -144,16 +230,39 @@ def _evaluate_run(run_dir: Path, n_episodes: int, scratch: Path) -> dict | None:
             policy.load_state_dict(state[group])
         exp.policies = policies
 
-    fresh = exp.evaluate(n_episodes=n_episodes)
-    logged = _last_logged_eval(run_dir)
+        if exp_type == "ibmarl" and protocol in ("rl_il", "both"):
+            eval_policies = _build_ibmarl_eval_policies(
+                cfg, run_dir, exp.env, exp.device, policies
+            )
+
+    # Same seed for both protocols so their difference is paired, and guarded so
+    # a re-eval cannot disturb anything else sharing VMAS's RNG stream.
+    seed = int(cfg.get("seed", 0)) + 10_000
+    fresh_rl: dict = {}
+    fresh_rl_il: dict = {}
+    with vmas_rng_guard():
+        if protocol in ("rl", "both") or eval_policies is None:
+            exp.reseed_eval_env(seed)
+            fresh_rl = exp.evaluate(n_episodes=n_episodes)
+        if eval_policies is not None:
+            exp.reseed_eval_env(seed)
+            fresh_rl_il = exp.evaluate(n_episodes=n_episodes, policies=eval_policies)
+
+    logged, logged_protocol = _last_logged_eval(run_dir)
+    groups = set(fresh_rl) | set(fresh_rl_il)
 
     return {
         "variant": run_dir.parent.name,
         "seed": cfg.get("seed"),
         "exp_type": exp_type,
         "groups": {
-            group: {"fresh": value, "logged": logged.get(group)}
-            for group, value in fresh.items()
+            group: {
+                "rl": fresh_rl.get(group),
+                "rl_il": fresh_rl_il.get(group),
+                "logged": logged.get(group),
+                "logged_protocol": logged_protocol,
+            }
+            for group in groups
         },
     }
 
@@ -170,6 +279,13 @@ def main() -> int:
              "per-seed estimate and costs seconds)",
     )
     parser.add_argument("--only", default=None, help="comma-separated variants")
+    parser.add_argument(
+        "--protocol",
+        choices=("rl", "rl_il", "both"),
+        default="both",
+        help="which evaluation protocol(s) to measure; rl_il applies to ibmarl "
+             "runs only and needs a critic checkpoint plus a readable teacher",
+    )
     parser.add_argument(
         "--out",
         default=None,
@@ -201,21 +317,32 @@ def main() -> int:
             )
             for run_dir in seeds:
                 print(f"[eval] {variant.name}/{run_dir.name}")
-                result = _evaluate_run(run_dir, args.episodes, scratch)
+                result = _evaluate_run(
+                    run_dir, args.episodes, scratch, args.protocol
+                )
                 if result is None:
                     continue
                 for group, vals in result["groups"].items():
+                    # delta compares like with like: the logged column is RL-only
+                    # for runs predating the protocol change and RL+IL after it.
+                    same = vals.get(vals["logged_protocol"] or "rl")
                     rows.append(
                         {
                             "variant": result["variant"],
                             "seed": result["seed"],
                             "group": group,
-                            "eval_reward_mean_fixed": vals["fresh"],
+                            "eval_reward_mean_rl": vals["rl"],
+                            "eval_reward_mean_rl_il": vals["rl_il"],
+                            # Back-compat alias for readers written against the
+                            # single-protocol CSV (analysis/paper3_figures.py):
+                            # whichever protocol matches what the run logged.
+                            "eval_reward_mean_fixed": same,
                             "eval_reward_mean_logged": vals["logged"],
+                            "logged_protocol": vals["logged_protocol"],
                             "delta": (
                                 None
-                                if vals["logged"] is None
-                                else vals["fresh"] - vals["logged"]
+                                if vals["logged"] is None or same is None
+                                else same - vals["logged"]
                             ),
                         }
                     )
@@ -234,33 +361,37 @@ def main() -> int:
     print(f"\nWrote {len(rows)} rows to {out_path.resolve()}")
 
     # ---- aggregate: mean +/- sem across seeds, the usual RL reporting unit ----
-    print(f"\n{'variant':<16} {'n':>3}  {'re-eval (fixed)':>20}  "
-          f"{'as logged':>20}  {'delta':>8}")
-    print("-" * 74)
+    def _stat(values):
+        vals = [v for v in values if v is not None]
+        if not vals:
+            return None, None
+        n = len(vals)
+        return mean(vals), (stdev(vals) / n ** 0.5) if n > 1 else 0.0
+
+    def _fmt(m, sem):
+        return " " * 20 if m is None else f"{m:+9.3f} +/- {sem:5.3f}"
+
+    print(f"\n{'variant':<16} {'n':>3}  {'re-eval RL-only':>20}  "
+          f"{'re-eval RL+IL':>20}  {'as logged':>20}  {'delta':>8}")
+    print("-" * 96)
     for variant in variants:
         vals = [r for r in rows if r["variant"] == variant.name]
         if not vals:
             continue
-        fresh = [r["eval_reward_mean_fixed"] for r in vals]
-        logged = [r["eval_reward_mean_logged"] for r in vals
-                  if r["eval_reward_mean_logged"] is not None]
-        n = len(fresh)
-        f_mean = mean(fresh)
-        f_sem = (stdev(fresh) / n ** 0.5) if n > 1 else 0.0
-        if logged:
-            l_mean = mean(logged)
-            l_sem = (stdev(logged) / len(logged) ** 0.5) if len(logged) > 1 else 0.0
-            l_str = f"{l_mean:+9.3f} +/- {l_sem:5.3f}"
-            d_str = f"{f_mean - l_mean:+8.3f}"
-        else:
-            l_str, d_str = " " * 20, " " * 8
-        print(f"{variant.name:<16} {n:>3}  {f_mean:+9.3f} +/- {f_sem:5.3f}  "
-              f"{l_str}  {d_str}")
+        rl_mean, rl_sem = _stat(r["eval_reward_mean_rl"] for r in vals)
+        il_mean, il_sem = _stat(r["eval_reward_mean_rl_il"] for r in vals)
+        l_mean, l_sem = _stat(r["eval_reward_mean_logged"] for r in vals)
+        d_mean, _ = _stat(r["delta"] for r in vals)
+        d_str = " " * 8 if d_mean is None else f"{d_mean:+8.3f}"
+        print(f"{variant.name:<16} {len(vals):>3}  {_fmt(rl_mean, rl_sem)}  "
+              f"{_fmt(il_mean, il_sem)}  {_fmt(l_mean, l_sem)}  {d_str}")
 
     print(
-        "\nre-eval (fixed) = old policy, fixed metric.  The gap to 'as logged' is "
-        "the\nmeasurement bug alone; comparing against a fresh sweep isolates the "
-        "training bug."
+        "\nre-eval = old policy, fixed metric.  'delta' compares the re-eval "
+        "against\n'as logged' on the protocol that run actually logged (see "
+        "logged_protocol);\nthe gap is the measurement bug alone, while comparing "
+        "against a fresh sweep\nisolates the training bug.  RL+IL is blank for "
+        "baselines and for runs with no\ncritic checkpoint."
     )
     return 0
 

@@ -18,8 +18,8 @@ extends: "../base.yaml"
 # r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_153124/policy_checkpoint.pth" #24 demonstrations
 # demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_153124/demonstrations.pt"
 
-r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_201300/policy_checkpoint.pth" #24 demonstrations .25 radius
-demonstrations_path: '/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_201300/demonstrations.pt'
+r2bc_checkpoint_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/navigation_r2bc_decent_20260129_201300/policy_checkpoint.pth" #24 demonstrations .25 radius
+demonstrations_path: '/home/tony-zhang/Research/ibmarl/R2BC/results/navigation_r2bc_decent_20260129_201300/demonstrations.pt'
 
 # r2bc_checkpoint_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/policy_checkpoint.pth" #24 demonstrations .4 radius
 # demonstrations_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/demonstrations.pt"
@@ -33,6 +33,11 @@ demonstrations_path: '/home/tony-zhang/Research/R2BC/results/navigation_r2bc_dec
 # IBRL-style single replay buffer (demos + online in one buffer, no annealing)
 ibmarl_replay_size: 200000       # single buffer capacity in transitions
 ibmarl_min_warm_up_frames: 5000  # collect this many frames before training starts
+# Who acts during warm-up: "arbiter" (the untrained critic arbitrates; the
+# historical default, what every navigation run used) or "teacher" (IBRL's
+# warm-up -- the teacher's noised proposal is executed until the buffer holds
+# ibmarl_min_warm_up_frames).  buzz_wire overrides this; see its overlay.
+ibmarl_warm_up_policy: arbiter
 
 strict : False #choose best combinatoion of policies or better policy actions
 
@@ -48,3 +53,17 @@ num_critics: 3
 exploration_noise:
   sigma_init: 0.1  # Initial Gaussian noise standard deviation for exploration
   sigma_end: 0.1   # Final Gaussian noise standard deviation (after annealing)
+
+# --- Evaluation protocol -------------------------------------------------
+# `eval_reward_mean` measures the arbitrated RL+IL policy (greedy: the critic
+# picks between the teacher's and the RL actor's action, no exploration noise),
+# matching IBRL's evaluation.  The RL actors alone are measured on a second,
+# seed-paired rollout set and logged as `rl_only_episode_reward_mean`; set this
+# to false to skip it and halve evaluation cost where that matters.
+eval_rl_only: true
+
+# Ensemble reduction on the evaluation (greedy) path only.  min_all takes the
+# min over every critic -- deterministic, the limit of training's min over a
+# random 2.  min_pair uses a fixed pair instead, reproducing the training-time
+# operator's subset size exactly while staying deterministic.
+eval_critic_reduction: min_all

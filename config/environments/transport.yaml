@@ -1,8 +1,18 @@
-# Navigation environment configuration
+# Transport environment configuration
 
 #Inherit from the base configuration
 extends: "../base.yaml"
 
 # Environment specific parameters
 n_agents: 3
+n_packages: 1
 horizon: 500
+
+# horizon 500 with base.yaml's frames_per_batch 1000 would give only 2 parallel
+# VMAS sub-envs (navigation gets 10).  Overridden here so transport sees a
+# comparable data regime; load_config merges this before computing total_frames.
+frames_per_batch: 5000
+
+# Stage 1: native VMAS dense shaping reward.  Flip to True (or pass --sparse)
+# for the sparse setting, which routes through TransportSparseReward.
+sparse_rewards: False

@@ -50,6 +50,22 @@ def load_config(scenario_name: str, exp_type: str) -> dict:
 
             config.update(exp_config)
 
+    # Per-scenario experiment overlay, e.g. config/experiments/ibmarl_transport.yaml.
+    # The experiment yamls hold absolute teacher-artifact paths that are only valid for
+    # one scenario; this layer lets a second scenario supply its own without touching
+    # the navigation defaults.  Unlike the layer above, `training` is merged key-by-key
+    # (as the environment layer does) so an overlay cannot clobber the whole block.
+    exp_scenario_path = Path(f"config/experiments/{exp_type}_{scenario_name}.yaml")
+    if exp_scenario_path.exists():
+        print(f"Loading per-scenario experiment config from: {exp_scenario_path}")
+        with open(exp_scenario_path) as f:
+            exp_scenario_config = yaml.safe_load(f) or {}
+
+        if "training" in exp_scenario_config:
+            config.setdefault("training", {}).update(exp_scenario_config.pop("training"))
+
+        config.update(exp_scenario_config)
+
     config['scenario_name'] = scenario_name
     config['exp_type'] = exp_type
     print(config)
@@ -154,6 +170,21 @@ if __name__ == "__main__":
     parser.add_argument("--render", action="store_true", help="Enable rendering")
     parser.add_argument("--seeds", type=int, default=1, help="Number of seeded runs to execute")
     parser.add_argument("--seed-start", type=int, default=0, help="Starting seed value (increments by 1 per run)")
+    reward_mode = parser.add_mutually_exclusive_group()
+    reward_mode.add_argument(
+        "--sparse",
+        dest="sparse_rewards",
+        action="store_true",
+        default=None,
+        help="Force the sparse reward transform on (overrides config.sparse_rewards)",
+    )
+    reward_mode.add_argument(
+        "--dense",
+        dest="sparse_rewards",
+        action="store_false",
+        default=None,
+        help="Force the environment's native dense reward (overrides config.sparse_rewards)",
+    )
     parser.add_argument(
         "--sigma_init",
         type=float,
@@ -177,6 +208,11 @@ if __name__ == "__main__":
     cfg = load_config(args.scenario_name, args.exp_type)
 
     cfg["render"] = bool(args.render)
+
+    # Reward-mode override.  Unlike --sigma_init/--sigma_end this is not gated
+    # on exp_type: every algorithm reads sparse_rewards through make_env.
+    if args.sparse_rewards is not None:
+        cfg["sparse_rewards"] = bool(args.sparse_rewards)
 
     # CLI overrides for IBMARL exploration noise
     if args.sigma_init is not None or args.sigma_end is not None:

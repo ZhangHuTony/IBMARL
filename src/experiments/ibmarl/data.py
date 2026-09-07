@@ -42,7 +42,7 @@ def _build_exploration_policy(parent, group, rl_policies, cfg, noise_modules_dic
     # Add arbiter on top
     return TensorDictSequential(
         exploration_policy_with_noise,
-        OverWriteActionWithBestComb(parent, group)
+        OverWriteActionWithBestComb(parent.action_arbiter, group)
     )
 
 def build_data_collector(cfg, parent, rl_policies, env, device):
@@ -65,6 +65,18 @@ def build_data_collector(cfg, parent, rl_policies, env, device):
         device=device,
         total_frames=total_frames
     )
+
+    # The collector must run THIS policy object, not a device-cast copy: a copy
+    # carries its own ActionArbiter (critics frozen at initialisation, warm-up
+    # flag never seen) and its own noise modules (annealing steps the originals).
+    # torchrl copies whenever a parameter or buffer is off-device -- see
+    # build_exploration_policy_with_noise for the buffer that used to trigger it.
+    if collector.policy is not exploration_policies:
+        raise RuntimeError(
+            "SyncDataCollector copied the exploration policy instead of sharing "
+            "it (a parameter or buffer is not on the collector device); the "
+            "acting arbiter would score with stale critics."
+        )
 
     return exploration_policies, collector, noise_modules
 

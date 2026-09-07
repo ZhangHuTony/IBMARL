@@ -1,0 +1,26 @@
+# Balance-specific overlay for IBMARL.
+# Merged on top of config/experiments/ibmarl.yaml by load_config, so everything not
+# named here (strict/soft/temperature/num_critics/exploration_noise) keeps its default.
+
+# R2BC teacher distilled from a MAPPO supervisor: 36 demonstrations, 10,800 transitions,
+# dense rewards.  Deliberately sub-optimal budget -- R2BC's own balance.yaml notes ~-220
+# mean return at 36 demos, against ~-1700 for random actions and ~+125 for a converged
+# policy.
+r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/balance_r2bc_decent_20260823_185058/policy_checkpoint.pth"
+demonstrations_path: "/home/tony-zhang/Research/R2BC/results/balance_r2bc_decent_20260823_185058/demonstrations.pt"
+
+# 10,800 demo transitions against 1.5M collected frames.  Navigation collects 300k against a
+# 200k buffer, so its demos survive to ~iter 200/300 (67% of the run).  At 200k here the ring
+# buffer wraps at iter 67/500 and erases the demos by ~iter 4, leaving IBMARL demo-free for
+# 99% of the run.  At 1M it wraps at iter 333/500, restoring the navigation ratio.
+ibmarl_replay_size: 1000000
+
+# Two demo quirks that are deliberately NOT worked around, because this loader is immune:
+#  * The demo buffer is 4-env interleaved (next_obs[t] == obs[t+4]) -- transport's is 2.
+#    That breaks loaders which rebuild episodes from row adjacency, but
+#    _load_demonstrations_into_buffer treats each row as a self-contained
+#    (obs, act, rew, next_obs) tuple, and next_obs[t] IS the true successor of obs[t]
+#    within its own env stream.
+#  * 'dones' is a balance-success flag, not a terminal flag (True mid-episode, never at the
+#    horizon-300 boundaries).  It cannot reach the TD target: losses.py reads
+#    ("next", group, "terminated"), which the loader sets to all-zeros.

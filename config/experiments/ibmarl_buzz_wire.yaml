@@ -1,0 +1,58 @@
+# Buzz-wire-specific overlay for IBMARL.
+# Merged on top of config/experiments/ibmarl.yaml by load_config, so everything not
+# named here (strict/soft/temperature/num_critics/exploration_noise/warm-up) keeps
+# its default.
+
+# R2BC teacher distilled from the tuned SimpleBuzzwireHeuristic demonstrator
+# (target_x 0.5, gain 4.0, sparse return ~-74.5): 12 demonstrations, 2,400
+# transitions, sparse rewards (gt_radius 0.1, fixed 200-step horizon).
+#
+# DELIBERATELY WEAKENED from the 16-demo teacher used through buzzwire2 (-80.6),
+# which left the RL side almost nothing to gain.  12 is the closest point below
+# it on the demo-count curve; the curve is a shelf then a cliff, so there is no
+# ~-125 teacher to be had at this granularity.
+#
+# Curve at 2-demo resolution, seed 0, 50-episode eval.  Both runs below are the
+# same trajectory, so the 12-demo checkpoint IS the curve's 12-demo point:
+#   results/buzzwire_r2bc_decent_20260826_221557 (2..16, granularity 2)
+#     2: -184.3   4: -179.5   6: -167.3   8: -165.1
+#    10: -132.2  12: -133.6  14:  -90.3  16:  -84.3
+#   results/buzzwire_r2bc_decent_20260826_225653 (the teacher itself, 12 demos)
+#
+# Teacher level: -133.6 +/- 5.7 (R2BC eval).  The weakening is NOT slowness --
+# median first arrival at the goal is step 70, the same as the 16-demo teacher's
+# 67.  It is (a) failure to HOLD the basin once reached (return counts steps
+# spent outside it: -124.5 on successful episodes vs -75.6) and (b) 12% of
+# episodes that never arrive at all (16-demo teacher: 4%).  Warm-up therefore
+# still sees ~88% successful teacher episodes, and both failure modes are ones
+# the RL side can plausibly fix.
+r2bc_checkpoint_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/buzzwire_r2bc_decent_20260826_225653/policy_checkpoint.pth"
+demonstrations_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/buzzwire_r2bc_decent_20260826_225653/demonstrations.pt"
+
+# 2,400 demo transitions against 600k collected frames.  Navigation collects
+# 300k against a 200k buffer, so its demos survive the first 67% of the run at a
+# 1.2% fill fraction.  400k reproduces that survival fraction exactly (the ring
+# wraps 400k frames in, i.e. iter 50/75 at 8k frames/iter) with a 0.6% demo
+# fraction at fill (0.8% when the teacher had 16 demos -- the survival fraction,
+# which is what this number sizes, is unchanged).  The ratio is
+# total_frames-based, so it is unaffected by the frames_per_batch widening.
+ibmarl_replay_size: 400000
+
+# --- Warm-up ----------------------------------------------------------------
+# IBRL's warm-up (num_warm_up_episode): the teacher collects the first episodes
+# before any RL update, so the arbiter's first decision is made by a critic that
+# has seen the teacher succeed.  With the default (the untrained critic
+# arbitrates the first batches) a coin flip decides the run here, because the RL
+# actor alone never reaches the goal (MADDPG 0/5): buzzwire1 ibmarl_strict seeds
+# 1 and 3 opened at 91% / 43% RL actions and sat at -200 for all 75 iterations,
+# while the three seeds that opened below 30% RL all crossed the teacher.
+# 40k frames = 5 iterations = 200 teacher episodes = 10% of the buffer, counted
+# against the 600k budget.  The noise-robustness figures behind this
+# (sigma 0.1: -84.3, 98.8% reaching the goal) were measured on the 16-demo
+# teacher; the 12-demo teacher reaches the goal in 88% of noiseless episodes, so
+# warm-up still supplies success signal, just less of it.  Its proposal is
+# executed with the same exploration noise it carries during arbitration.
+# Both warm-up settings are unchanged from buzzwire2, so the teacher is the only
+# thing this sweep varies.
+ibmarl_warm_up_policy: teacher
+ibmarl_min_warm_up_frames: 40000

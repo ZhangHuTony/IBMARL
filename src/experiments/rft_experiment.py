@@ -284,8 +284,11 @@ class RftExperiment(MaddpgExperiment):
 
                 self.exploration_policies[group][-1].step(current_frames)
 
-            # --- Dedicated evaluation ---
-            eval_means = self.evaluate(n_episodes=20)
+            # --- Dedicated evaluation (thinned by eval_interval; None rows are
+            # skipped by MetricsLogger.log and dropped by the analysis scripts) ---
+            eval_means = None
+            if self.should_evaluate(iteration):
+                eval_means = self.evaluate(n_episodes=20)
 
             # --- Metrics ---
             elapsed = elapsed_offset + (time.time() - start_time)
@@ -311,7 +314,7 @@ class RftExperiment(MaddpgExperiment):
                     train_step=total_train_steps,
                     speed_fps=round(speed, 2),
                     episode_reward_mean=episode_reward_mean,
-                    eval_reward_mean=eval_means[group],
+                    eval_reward_mean=eval_means[group] if eval_means is not None else None,
                     actor_loss=round(sum(actor_losses[group]) / n_opt, 6),
                     critic_loss=round(sum(critic_losses[group]) / n_opt, 6),
                     replay_size=len(self.replay_buffers[group]),

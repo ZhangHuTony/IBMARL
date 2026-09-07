@@ -31,13 +31,49 @@ class ActionArbiter:
 
         self.num_critics = config.get("num_critics")
 
-        
+        # Ensemble reduction used on the *greedy* (evaluation) path only.
+        #   min_all  -- min over every member; the deterministic limit of the
+        #               training-time min-over-a-random-2.
+        #   min_pair -- min over a fixed pair, reproducing the training-time
+        #               operator exactly while staying deterministic.
+        self.eval_critic_reduction = config.get("eval_critic_reduction", "min_all")
 
-    def actor_proposal(self, group, obs, a_rl) -> torch.Tensor:
+        # Warm-up override, owned by the experiment: while set, the acting
+        # path executes the teacher's (noised) proposal for every batch
+        # element and the critic is not consulted.  IBRL's warm-up -- its BC
+        # policy collects ``num_warm_up_episode`` episodes before any RL
+        # update -- so that the arbiter's first real decision is made by a
+        # critic that has seen the teacher succeed.  Never applies to the
+        # greedy (evaluation) path.
+        self.force_il = False
+
+    def __deepcopy__(self, memo):
+        '''
+        The arbiter is shared state, not policy state: it holds the live critic
+        ensembles, the teacher and the warm-up flag.  A deep copy -- torchrl's
+        collector makes one of the policy when a buffer is off-device -- would
+        freeze the critics at their current weights, so copies resolve to the
+        one instance.
+        '''
+        return self
+
+    def actor_proposal(self, group, obs, a_rl, greedy: bool = False) -> torch.Tensor:
+        '''
+        *greedy* selects the evaluation protocol: no exploration noise on the IL
+        candidate, a deterministic ensemble reduction, and argmax instead of
+        Boltzmann sampling.  It also skips the logging metrics, which cost three
+        GPU syncs per call and whose variance term is NaN for a single-element
+        batch (the one-sub-env rendering environment).
+
+        With ``force_il`` set (teacher warm-up) the teacher's proposal is
+        executed without consulting the critic; evaluation is never forced.
+        '''
+        if self.force_il and not greedy:
+            return self._teacher_proposal(group, obs, a_rl)
         if self.strict:
-            return self._best_act_strict(group, obs, a_rl)
+            return self._best_act_strict(group, obs, a_rl, greedy=greedy)
         else:
-            return self._best_act_comb(group, obs, a_rl)
+            return self._best_act_comb(group, obs, a_rl, greedy=greedy)
         
     def bootstrap_proposal(self, group, next_obs) -> torch.Tensor:
         if self.strict:
@@ -53,7 +89,73 @@ class ActionArbiter:
          if self.num_critics <=2:
               return list(range(self.num_critics))
          return np.random.choice(self.num_critics, 2, replace=False)
-    
+
+    def _greedy_critic_indices(self):
+         '''
+         Deterministic counterpart of ``_sample_critic_indices`` for evaluation.
+
+         ``min_all`` is strictly more pessimistic than the training-time
+         operator, and asymmetrically so: the critic has seen far fewer pure-IL
+         actions than RL/arbitrated ones, so the IL candidate carries the larger
+         epistemic spread and takes the larger min-penalty.  That biases greedy
+         selection *towards* the RL action relative to training-time arbitration
+         -- a conservative bias for the RL+IL >= RL claim, not a flattering one.
+         ``min_pair`` reproduces the training operator's subset size exactly.
+         '''
+         if self.eval_critic_reduction == "min_pair":
+              return list(range(min(2, self.num_critics)))
+         return list(range(self.num_critics))
+
+    def _select(self, q_tot, greedy: bool):
+         '''
+         Pick a candidate index per batch element from the joint scores.
+
+         *q_tot* is [K, B].  Returns [B].  Boltzmann-samples at ``temperature``
+         when ``soft`` is set and we are not on the greedy path; argmax
+         otherwise.
+         '''
+         if self.soft and not greedy:
+              # Permute to [B, K] for Categorical
+              logits = q_tot.permute(1, 0) / self.temperature
+              return torch.distributions.Categorical(logits=logits).sample()
+         return torch.argmax(q_tot, dim=0)
+
+    def _il_candidate(self, group, obs, greedy: bool):
+        '''
+        The teacher's proposal for *obs* ([B, N, obs_dim]), perturbed with the
+        IL exploration noise unless on the greedy (evaluation) path.
+        '''
+        a_il = self.il_policy.get_action(group, obs)
+        if not greedy and group in self.il_noise_modules:
+            td_il = TensorDict(
+                {(group, "action"): a_il},
+                batch_size=[obs.shape[0]],
+                device=obs.device,
+            )
+            td_il = self.il_noise_modules[group](td_il)
+            a_il = td_il[(group, "action")]
+        return a_il
+
+    def _teacher_proposal(self, group, obs, a_rl):
+        '''
+        Warm-up acting path (``force_il``): the noised teacher proposal is
+        executed for every batch element.  Returns the same (action, mask,
+        metrics) triple as the arbitrated paths so the collector's batch schema
+        is identical before and after warm-up: the mask is all-IL and the Q
+        statistics are zero because no Q-value was computed.
+        '''
+        B, N, _ = obs.shape
+        a_il = self._il_candidate(group, obs, greedy=False)
+        if a_il.shape != a_rl.shape:
+            raise RuntimeError(f"a_il shape {list(a_il.shape)} != a_rl shape {list(a_rl.shape)}")
+        mask = torch.zeros(B, N, device=obs.device, dtype=torch.float32)
+        metrics = {
+            'mean_action_diff': (a_rl - a_il).abs().mean().item(),
+            'mean_q_diff': 0.0,
+            'var_q_diff': 0.0,
+        }
+        return a_il, mask, metrics
+
     def _evaluate_critics(self, group, td, indices):
          '''
          evaluates specific members of the target ensemble
@@ -67,7 +169,7 @@ class ActionArbiter:
 
          return q_stack
 
-    def _best_act_comb(self, group, obs, a_rl) -> torch.Tensor:
+    def _best_act_comb(self, group, obs, a_rl, greedy: bool = False) -> torch.Tensor:
         '''
         finds the best joint action from {a_IL, a_RL}^N which maximizes critic value
 
@@ -77,6 +179,9 @@ class ActionArbiter:
         
         Output:
             a_exec: [B, N, act_dim] 
+
+        With *greedy* set (evaluation), metrics are not computed and ``None`` is
+        returned in their place.
         '''
 
         # dimension verifications
@@ -93,16 +198,8 @@ class ActionArbiter:
         _, _, act_dim = a_rl.shape
 
 
-        # Compute IL action candidates and add exploration noise (same as RL)
-        a_il = self.il_policy.get_action(group, obs)
-        if group in self.il_noise_modules:
-            td_il = TensorDict(
-                {(group, "action"): a_il},
-                batch_size=[B],
-                device=obs.device,
-            )
-            td_il = self.il_noise_modules[group](td_il)
-            a_il = td_il[(group, "action")]
+        # IL candidate + exploration noise (same as RL) unless greedy
+        a_il = self._il_candidate(group, obs, greedy)
 
         if a_il.shape != a_rl.shape:
             raise RuntimeError(f"a_il shape {list(a_il.shape)} != a_rl shape {list(a_rl.shape)}")
@@ -132,30 +229,25 @@ class ActionArbiter:
             device = obs.device,
         )
 
-        indices = self._sample_critic_indices()
+        indices = self._greedy_critic_indices() if greedy else self._sample_critic_indices()
 
-        # Returns stacked Q-values: [2, K, B, N, 1]
+        # Returns stacked Q-values: [len(indices), K, B, N, 1]
         q_subset = self._evaluate_critics(group, td, indices)
 
         # Result: [K, B, N, 1]
         q_min_per_agent, _ = torch.min(q_subset, dim=0)
 
-        q_tot = q_min_per_agent.sum(dim=2).squeeze(-1)
-        
-        if self.soft:
-                    # q_tot is [K, B]. Permute to [B, K] for Categorical distribution
-                    logits = q_tot.permute(1, 0) / self.temperature
-                    
-                    # Create distribution over the K permutations and sample
-                    dist = torch.distributions.Categorical(logits=logits)
-                    best_k = dist.sample() # [B]
-        else:
-                    best_k = torch.argmax(q_tot, dim=0) # [B]
+        q_tot = q_min_per_agent.sum(dim=2).squeeze(-1)  # [K, B]
+
+        best_k = self._select(q_tot, greedy)  # [B]
 
         a_exec = joint[best_k, torch.arange(B, device=obs.device)]
 
         perm_map = torch.tensor(choices, dtype=torch.float32, device=obs.device) # [K, N]
         mask = perm_map[best_k] # [B, N]
+
+        if greedy:
+            return a_exec, mask, None
 
         # Compute metrics for logging
         # 1. Mean difference between a_RL and a_IL actions
@@ -231,13 +323,7 @@ class ActionArbiter:
 
         q_sum_for_selection = q_vals.sum(dim=2)
 
-        if self.soft:
-            # Permute to [B, K] for Categorical distribution
-            logits = q_sum_for_selection.permute(1, 0) / self.temperature
-            dist = torch.distributions.Categorical(logits=logits)
-            best_k = dist.sample() # [B]
-        else:
-            best_k = torch.argmax(q_sum_for_selection, dim=0) # [B]
+        best_k = self._select(q_sum_for_selection, greedy=False)  # [B]
 
 
         # Gather the best action: [B, N, Act_Dim]
@@ -249,7 +335,7 @@ class ActionArbiter:
 
         return a_next_star, q_star
 
-    def _best_act_strict(self, group: str, obs: torch.Tensor, a_rl: torch.Tensor) -> torch.Tensor:
+    def _best_act_strict(self, group: str, obs: torch.Tensor, a_rl: torch.Tensor, greedy: bool = False) -> torch.Tensor:
         """
         Choose between the all-IL joint action and the all-RL joint action
         by scoring both with the critic and taking the higher-value option.
@@ -260,6 +346,9 @@ class ActionArbiter:
 
         Output:
             a_exec: [B, N, act_dim]
+
+        With *greedy* set (evaluation), metrics are not computed and ``None`` is
+        returned in their place.
         """
         # dimension verifications
         if obs.dim() != 3:
@@ -274,15 +363,7 @@ class ActionArbiter:
         B, N, _ = obs.shape
 
         # IL candidate (must match RL shape) + exploration noise (same as RL)
-        a_il = self.il_policy.get_action(group, obs)
-        if group in self.il_noise_modules:
-            td_il = TensorDict(
-                {(group, "action"): a_il},
-                batch_size=[B],
-                device=obs.device,
-            )
-            td_il = self.il_noise_modules[group](td_il)
-            a_il = td_il[(group, "action")]
+        a_il = self._il_candidate(group, obs, greedy)
         if a_il.shape != a_rl.shape:
             raise RuntimeError(f"a_il shape {list(a_il.shape)} != a_rl shape {list(a_rl.shape)}")
 
@@ -299,11 +380,11 @@ class ActionArbiter:
             device=obs.device,
         )
 
-        # 1. Sample 2 random critics
-        indices = self._sample_critic_indices()
+        # 1. Sample 2 random critics (all of them, deterministically, when greedy)
+        indices = self._greedy_critic_indices() if greedy else self._sample_critic_indices()
 
-        # 2. Evaluate ONLY those 2 critics
-        # Returns stacked Q-values: [2, Candidates=2, B, N, 1]
+        # 2. Evaluate ONLY those critics
+        # Returns stacked Q-values: [len(indices), Candidates=2, B, N, 1]
         q_subset = self._evaluate_critics(group, td, indices)
 
         # 3. Take Min over the Ensemble subset (dim=0)
@@ -319,21 +400,16 @@ class ActionArbiter:
         # Selection Logic
         # -----------------------------------------------------------
 
-        if self.soft:
-            # Permute to [B, 2] for Categorical distribution
-            logits = q_tot.permute(1, 0) / self.temperature
-
-            # Create distribution and sample (0 or 1)
-            dist = torch.distributions.Categorical(logits=logits)
-            best_k = dist.sample() # [B]
-        else: 
-            best_k = torch.argmax(q_tot, dim=0)  # [B], values in {0,1}
+        best_k = self._select(q_tot, greedy)  # [B], values in {0,1}
 
         # Gather the selected action
         a_exec = joint[best_k, torch.arange(B, device=obs.device)]  # [B,N,act_dim]
 
         # Create mask: 0 if IL was chosen, 1 if RL was chosen
         mask = best_k.view(-1, 1).expand(-1, N).float()
+
+        if greedy:
+            return a_exec, mask, None
 
         # Compute metrics for logging
         # 1. Mean difference between a_RL and a_IL actions
@@ -364,8 +440,6 @@ class ActionArbiter:
 
         B, N, obs_dim = next_obs.shape
 
-        act_dim = self.env.full_action_spec[group, "action"]
-        
         #IL candidate
         a_il = self.il_policy.get_action(group, next_obs)
 
@@ -408,13 +482,8 @@ class ActionArbiter:
         # Sum over agents for selection score
         # Shape: [2, B]
         q_sum_for_selection = q_vals.sum(dim=2)
-        
-        if self.soft:
-            logits = q_sum_for_selection.permute(1, 0) / self.temperature
-            dist = torch.distributions.Categorical(logits=logits)
-            best_k = dist.sample() # [B]
-        else: 
-            best_k = torch.argmax(q_sum_for_selection, dim=0)  # [B], values in {0,1}
+
+        best_k = self._select(q_sum_for_selection, greedy=False)  # [B], values in {0,1}
 
         # ------------------------------------------------------------------
         # RETURN

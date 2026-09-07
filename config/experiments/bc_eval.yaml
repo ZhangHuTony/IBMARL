@@ -1,3 +1,7 @@
 extends: "../base.yaml"
 
-r2bc_checkpoint_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/policy_checkpoint.pth"
+# Navigation teacher, same checkpoint ibmarl.yaml bootstraps from.  In practice
+# analysis/paper_run.py overrides this (VARIANTS["bc_eval"] carries
+# __use_ibmarl_bc_checkpoint__), but a dead /home/connor path left here is a
+# trap for any other caller.  Per-scenario overlays supersede it.
+r2bc_checkpoint_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/navigation_r2bc_decent_20260129_201300/policy_checkpoint.pth"

@@ -2,6 +2,8 @@
 Base class for multi-agent reinforcement learning experiments.
 """
 
+import contextlib
+
 import torch
 from abc import abstractmethod
 import numpy as np
@@ -18,6 +20,41 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+
+@contextlib.contextmanager
+def vmas_rng_guard():
+    """
+    Make a block of environment interaction invisible to every *other* VMAS
+    environment in the process.
+
+    ``vmas.simulator.environment.Environment`` keeps ``vmas_random_state`` as a
+    single **class-level** list, and its ``local_seed`` decorator -- applied to
+    ``__init__``, ``reset``, ``reset_at``, ``step``, ``seed`` and ``render`` --
+    swaps the global torch/numpy/random state to that list, runs, then writes the
+    advanced state back.  Every ``VmasEnv`` in the process therefore draws from
+    one shared stream: the training env, the evaluation env and the rendering
+    env alike.
+
+    The practical consequence is that evaluation rollouts advance the stream the
+    collector's ``reset_world_at`` spawns come from -- evaluating changes what is
+    subsequently trained on.  Wrapping the evaluation block in this guard
+    restores the shared state afterwards, so evaluation genuinely cannot reach
+    training and its cost in perturbation does not scale with how many protocols
+    are measured.
+
+    The restore must be an in-place slice assignment: ``local_seed`` closed over
+    the list object at class-definition time, so rebinding the attribute would
+    not be seen.
+    """
+    from vmas.simulator.environment.environment import Environment
+
+    state = Environment.vmas_random_state
+    snapshot = [state[0].clone(), state[1], state[2]]
+    try:
+        yield
+    finally:
+        state[:] = snapshot
 
 
 class BaseMARLExperiment(ResumeMixin):
@@ -51,6 +88,11 @@ class BaseMARLExperiment(ResumeMixin):
         Seeded off the training seed so eval episodes are not drawn from the
         same reset sequence as the training episodes, while staying
         reproducible and identical across variants at the same seed.
+
+        Note that the seed argument is the *only* thing separating the two.  All
+        VMAS environments in a process share one RNG stream (see
+        ``vmas_rng_guard``), so a rollout here still advances the stream the
+        collector resets from unless the caller holds that guard.
 
         Built on first use so eval-only experiments that never drive a
         collector don't pay for a second simulator.
@@ -96,7 +138,47 @@ class BaseMARLExperiment(ResumeMixin):
             done = done.unsqueeze(-2).expand(*done.shape[:-1], n_agents, 1)
         return done
 
-    def evaluate(self, n_episodes: int = 20) -> dict:
+    def should_evaluate(self, iteration: int) -> bool:
+        """
+        Whether the (0-based) *iteration* about to be logged should run a
+        dedicated evaluation.
+
+        Evaluation is the dominant per-iteration cost on slow scenarios
+        (buzz_wire: ~64% of an iteration -- it rolls out twice the horizon of
+        collection), and its result is only logged.  It is side-effect-free on
+        training only when the caller wraps it in ``vmas_rng_guard``: the
+        ``eval_env`` is a separate simulator but not a separate RNG stream, so an
+        unguarded rollout shifts the collector's subsequent resets.  Thinning it
+        out trades curve resolution for wall time.
+
+        ``eval_interval`` defaults to 1, so navigation/balance/transport keep
+        evaluating every iteration.  The final iteration always evaluates, so the
+        tail-10 final-return statistic stays well defined.
+        """
+        interval = int(self.config.get("eval_interval", 1))
+        if interval <= 1:
+            return True
+        last = int(self.config.get("n_iters", 0)) - 1
+        return iteration % interval == 0 or iteration >= last
+
+    def reseed_eval_env(self, seed: int) -> None:
+        """
+        Pin ``eval_env`` to *seed* so the next rollout starts from a known set of
+        initial conditions.
+
+        Used to make two evaluation protocols measured at the same iteration a
+        *paired* comparison -- both see identical episodes, so their difference
+        is not swamped by reset noise at 20 episodes.  Only meaningful inside
+        ``vmas_rng_guard``, which contains the reseed.
+        """
+        self.eval_env.set_seed(int(seed))
+
+    def evaluate(
+        self,
+        n_episodes: int = 20,
+        policies: dict | None = None,
+        extra_keys: tuple = (),
+    ) -> dict:
         """
         Deterministic evaluation: run the learned policy (no exploration noise)
         and return the mean *completed-episode* return per group.
@@ -110,9 +192,18 @@ class BaseMARLExperiment(ResumeMixin):
         per agent (matching ``episode_reward_mean``), i.e. an episode with N
         agents contributes N samples to the mean.
 
-        Uses self.rl_policies (IBMARL) or self.policies (MADDPG / RLFD / RFT).
+        *policies* overrides what is rolled out; when omitted it falls back to
+        self.rl_policies (IBMARL) or self.policies (MADDPG / RLFD / RFT).  IBMARL
+        passes its arbitrated RL+IL policy here and its bare RL actors on a
+        second call, which is how one iteration yields both protocols.
+
+        *extra_keys* names per-group keys the policy writes into the rollout
+        (e.g. ``arbiter_choice``).  Their means land in ``self.last_eval_extras``
+        as ``{group: {key: float}}`` rather than in the return value, so the
+        signature stays a plain ``{group: mean_return}`` for every caller.
         """
-        policies = getattr(self, "rl_policies", None) or getattr(self, "policies", None)
+        if policies is None:
+            policies = getattr(self, "rl_policies", None) or getattr(self, "policies", None)
         if policies is None:
             raise RuntimeError("No policies found (expected self.policies or self.rl_policies)")
 
@@ -125,6 +216,7 @@ class BaseMARLExperiment(ResumeMixin):
         n_rollouts = max(1, -(-n_episodes // n_envs))  # ceil
 
         returns = {group: [] for group in env.group_map.keys()}
+        extras = {group: {key: [] for key in extra_keys} for group in env.group_map.keys()}
         with torch.no_grad():
             with set_exploration_type(ExplorationType.MODE):
                 for _ in range(n_rollouts):
@@ -144,6 +236,23 @@ class BaseMARLExperiment(ResumeMixin):
                         ep_reward = out.get(("next", group, "episode_reward"))
                         done = self._agent_done_mask(out, group, ep_reward)
                         returns[group].append(ep_reward[done].float())
+                        for key in extra_keys:
+                            # Averaged over every executed step, not only the
+                            # ones ending an episode: with
+                            # break_when_any_done=False sub-envs auto-reset and
+                            # keep stepping, so this matches the collector-side
+                            # convention for the same quantity.
+                            value = out.get((group, key), None)
+                            if value is not None:
+                                extras[group][key].append(value.float().reshape(-1))
+
+        self.last_eval_extras = {
+            group: {
+                key: (torch.cat(chunks).mean().item() if chunks else None)
+                for key, chunks in by_key.items()
+            }
+            for group, by_key in extras.items()
+        }
 
         mean_reward_by_group = {}
         for group, chunks in returns.items():
