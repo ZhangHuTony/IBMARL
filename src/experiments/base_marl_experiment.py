@@ -3,6 +3,7 @@ Base class for multi-agent reinforcement learning experiments.
 """
 
 import contextlib
+import random
 
 import torch
 from abc import abstractmethod
@@ -28,13 +29,12 @@ def vmas_rng_guard():
     Make a block of environment interaction invisible to every *other* VMAS
     environment in the process.
 
-    ``vmas.simulator.environment.Environment`` keeps ``vmas_random_state`` as a
-    single **class-level** list, and its ``local_seed`` decorator -- applied to
-    ``__init__``, ``reset``, ``reset_at``, ``step``, ``seed`` and ``render`` --
-    swaps the global torch/numpy/random state to that list, runs, then writes the
-    advanced state back.  Every ``VmasEnv`` in the process therefore draws from
-    one shared stream: the training env, the evaluation env and the rendering
-    env alike.
+    VMAS versions with ``Environment.vmas_random_state`` keep a single
+    class-level state that their ``local_seed`` decorator swaps into the global
+    torch/numpy/random generators around environment calls.  VMAS 1.4.x uses
+    those global generators directly.  In both cases every ``VmasEnv`` in the
+    process therefore draws from shared state: the training env, the evaluation
+    env and the rendering env alike.
 
     The practical consequence is that evaluation rollouts advance the stream the
     collector's ``reset_world_at`` spawns come from -- evaluating changes what is
@@ -43,18 +43,34 @@ def vmas_rng_guard():
     training and its cost in perturbation does not scale with how many protocols
     are measured.
 
-    The restore must be an in-place slice assignment: ``local_seed`` closed over
-    the list object at class-definition time, so rebinding the attribute would
-    not be seen.
+    For the newer implementation the restore must be an in-place slice
+    assignment: ``local_seed`` closed over the list object at class-definition
+    time, so rebinding the attribute would not be seen.
     """
     from vmas.simulator.environment.environment import Environment
 
-    state = Environment.vmas_random_state
-    snapshot = [state[0].clone(), state[1], state[2]]
+    state = getattr(Environment, "vmas_random_state", None)
+    if state is not None:
+        snapshot = [state[0].clone(), state[1], state[2]]
+        try:
+            yield
+        finally:
+            state[:] = snapshot
+        return
+
+    # VMAS 1.4.x seeds and consumes the process-wide generators directly.
+    torch_state = torch.get_rng_state()
+    cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    numpy_state = np.random.get_state()
+    python_state = random.getstate()
     try:
         yield
     finally:
-        state[:] = snapshot
+        torch.set_rng_state(torch_state)
+        if cuda_states is not None:
+            torch.cuda.set_rng_state_all(cuda_states)
+        np.random.set_state(numpy_state)
+        random.setstate(python_state)
 
 
 class BaseMARLExperiment(ResumeMixin):

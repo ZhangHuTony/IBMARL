@@ -3,7 +3,6 @@ Registry for custom environment transforms.
 '''
 
 from src.environment.transforms.navigation_sparse import NavigationSparseReward
-from src.environment.transforms.balance_sparse import BalanceSparseReward
 from src.environment.transforms.transport_sparse import TransportSparseReward
 
 def build_transforms(config: dict):
@@ -14,15 +13,10 @@ def build_transforms(config: dict):
     sparse_rewards = config.get("sparse_rewards", False)
 
     transforms = []
-    transform_repr = []
-
-    # NOTE: buzz_wire's sparse reward is NOT a transform - the ball position it
-    # needs is absent from the observation, so it lives at scenario level
-    # (src/environment/scenarios/buzz_wire_sparse.py via resolve_scenario in
-    # make_env.py); buzz_wire intentionally has no branch here.
+    # Balance and buzz_wire use scenario-level sparse rewards because their
+    # exact native goal predicates require simulator state.
 
     if scenario == "navigation" and sparse_rewards:
-        transform_repr.append("NavigationSparseReward")
         transforms.append(
             NavigationSparseReward(
                 group="agents",
@@ -31,16 +25,7 @@ def build_transforms(config: dict):
                 rel_goal_slice=slice(4, 6), 
             )
         )
-    elif scenario == "balance" and sparse_rewards:
-        transform_repr.append("BalanceSparseReward")
-        transforms.append(
-            BalanceSparseReward(
-                group="agents",
-                success_threshold=config.get("gt_radius"),
-            )
-        )
     elif scenario == "transport" and sparse_rewards:
-        transform_repr.append("TransportSparseReward")
         transforms.append(
             TransportSparseReward(
                 group="agents",
@@ -49,5 +34,4 @@ def build_transforms(config: dict):
                 n_packages=config.get("n_packages", 1),
             )
         )
-    print("Transformations added to environment:", transform_repr) 
-    return transforms    
+    return transforms

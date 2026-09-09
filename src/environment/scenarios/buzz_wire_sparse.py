@@ -1,22 +1,20 @@
 """
-Sparse-reward, fixed-horizon buzz_wire scenario.
+Sparse-reward buzz_wire scenario.
 
 Unlike navigation/balance/transport, the sparse reward for buzz_wire cannot be
 a TorchRL transform: the success predicate is the BALL's distance to the goal,
 and the ball's position is not part of the agent observation (per-agent obs is
 [pos, vel, pos - goal]; the midpoint-of-agents proxy errs by up to the rod
-length 0.25, unusable against a 0.1 radius). Instead this subclass is passed
+length 0.25, unusable against the native 0.01 tolerance). This subclass is passed
 as a scenario *instance* to torchrl's VmasEnv (which forwards it untouched to
 vmas.make_env), computing the sparse reward from simulator state.
 
-done() is suppressed so vmas's `scenario.done() + (steps >= max_steps)` reduces
-to pure horizon truncation - fixed-length episodes like sparse navigation, and
-no pathological "crash early to stop collecting -1" incentive.
+The reward is 1 exactly on goal success and 0 otherwise.  Success also ends
+the episode, so an episode return is necessarily either 0 or 1.  Native
+collision termination is preserved and carries no reward.
 
-KEEP IN LOCKSTEP with R2BC/src/scenarios/buzz_wire/wrappers/sparse_reward.py -
-the recorded demonstration rewards must match this formula exactly (same
-success_threshold), and the threshold cannot be recomputed from saved
-observations after the fact.
+Recorded demonstration rewards must use this same native success predicate;
+it cannot be reconstructed exactly from the saved per-agent observations.
 """
 
 from vmas.scenarios.buzz_wire import Scenario as BuzzWireScenario
@@ -25,10 +23,14 @@ import torch
 
 
 class SparseRewardBuzzWireScenario(BuzzWireScenario):
-    def __init__(self, success_threshold: float = 0.1, out_penalty: float = -1.0):
-        super().__init__()
-        self.success_threshold = success_threshold
-        self.out_penalty = out_penalty
+    def _on_goal(self) -> torch.Tensor:
+        # This is the exact goal predicate used by VMAS BuzzWireScenario.done().
+        return (
+            torch.linalg.vector_norm(
+                self.ball.state.pos - self.goal.state.pos, dim=-1
+            )
+            <= 0.01
+        )
 
     def make_world(self, batch_dim, device, **kwargs):
         world = super().make_world(batch_dim, device, **kwargs)
@@ -42,14 +44,10 @@ class SparseRewardBuzzWireScenario(BuzzWireScenario):
         # first agent's call; the base reward is shared across both agents.
         gt_reward = super().reward(agent)
 
-        dist = torch.linalg.vector_norm(
-            self.ball.state.pos - self.goal.state.pos, dim=-1
-        )
-        inside_mask = (dist < self.success_threshold).to(self.pos_rew.dtype)
-        outside_mask = 1.0 - inside_mask
-
-        # pos_rew only inside the radius (no collision term); flat penalty outside.
-        final_reward = (self.pos_rew * inside_mask) + (self.out_penalty * outside_mask)
+        # Binary success reward.  Do not retain VMAS's dense position shaping:
+        # remaining inside the goal for multiple simulator steps must not turn
+        # one success into a return near the rollout horizon.
+        final_reward = self._on_goal().to(self.pos_rew.dtype)
 
         self.gt_reward = gt_reward
         return final_reward
@@ -60,6 +58,4 @@ class SparseRewardBuzzWireScenario(BuzzWireScenario):
         return info
 
     def done(self):
-        done = super().done()
-        done.fill_(False)
-        return done
+        return super().done()

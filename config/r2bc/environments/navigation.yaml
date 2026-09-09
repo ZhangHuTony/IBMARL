@@ -1,0 +1,7 @@
+n: 3
+horizon: 100
+gt_radius: 0.4
+expert_pth: "/home/hero/Documents/r2bc_sim_marl/r2bc_supervisors_final/navigation/checkpoint_000100"
+training:
+  total_demonstrations: 24
+  total_samples: 4

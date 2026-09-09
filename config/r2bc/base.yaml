@@ -1,0 +1,14 @@
+# R2BC-only defaults. Scenario-specific values belong in environments/.
+seed: 42
+n: 3
+horizon: 100
+hidden_size: 8
+hidden_layers: 1
+sparse_rewards: true
+expert_policy_type: learned
+training:
+  total_demonstrations: 500
+  total_samples: 10
+  batch_size: 256
+  shuffle_data: true
+  alpha: 0.9

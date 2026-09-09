@@ -1,15 +1,10 @@
 import torch
+from torchrl.data import CompositeSpec, UnboundedContinuousTensorSpec
 from torchrl.envs.transforms import Transform
-from torchrl.data import UnboundedContinuousTensorSpec, CompositeSpec
+
 
 class BalanceSparseReward(Transform):
-    """
-    Sparse reward for navigation:
-    reward = 1 if agent is on goal, else 0.
-
-    This version overrides _call directly to avoid the NotImplementedError
-    caused by the base Transform class trying to use _apply_transform.
-    """
+    """Emit a binary reward and end an episode when the ball reaches the goal."""
 
     def __init__(
         self,
@@ -17,108 +12,56 @@ class BalanceSparseReward(Transform):
         group: str = "agents",
         success_threshold,
     ):
-        # We initialize the base class without in_keys/out_keys.
-        # This prevents the base class from trying to run its automated 
-        # _apply_transform logic, which is what causes the error.
+        # No in_keys/out_keys: this transform updates reward and termination
+        # together from the complete TensorDict produced by the environment.
         super().__init__()
-        
+
         self.group = group
         self.success_threshold = success_threshold
 
     def _compute_dist(self, obs: torch.Tensor) -> torch.Tensor:
-        # print("OBS SHAPE", obs.shape)
-        rel = obs[..., 8:10]  # (..., n_agents, 2)
-        rel = rel[:, 0]
-        # print("REL", rel)
-        # print("REL SHAPE", rel.shape)
-        dist = torch.linalg.vector_norm(rel, dim=-1)
-        # print("DIST", dist)
-        # print("REL NORM", torch.linalg.vector_norm(rel, dim=-1))
-        return dist
+        # Balance observations contain package_pos - goal_pos at indices 8:10.
+        # This value is identical for every agent, so use the first agent to
+        # produce one success predicate per parallel environment.
+        package_to_goal = obs[..., 0, 8:10]
+        return torch.linalg.vector_norm(package_to_goal, dim=-1)
 
     def _call(self, td):
-        """
-        Manually calculate the reward and update the TensorDict.
-        This is called during the environment step.
-        """
-        # The observation we need is located in the same TensorDict 
-        # that the environment just populated during its internal _step.
+        """Replace the dense reward and terminate successful environments."""
         obs = td.get((self.group, "observation"))
+        current_reward = td.get((self.group, "reward"))
 
-        dist = self._compute_dist(obs)
+        success = self._compute_dist(obs) < self.success_threshold
 
-        #----1.0 if close otherwise 0-------------------#
-        
-        # Calculate sparse reward: 1.0 if close enough, else 0.0
-        # success = (dist < self.success_threshold).to(obs.dtype)
-        
-        # # Reshape to (..., n_agents, 1) to match TorchRL reward specs
-        # reward = success.unsqueeze(-1)
+        # All agents share the balance objective and therefore receive the
+        # same 0/1 reward.
+        reward_success = success
+        while reward_success.ndim < current_reward.ndim:
+            reward_success = reward_success.unsqueeze(-1)
+        reward = reward_success.to(current_reward.dtype).expand_as(current_reward)
+        td.set((self.group, "reward"), reward)
 
-        # # Overwrite the default reward with our sparse version
-        # td.set((self.group, "reward"), reward)
-        #--------------------------------------------------------#
+        # Preserve native terminal conditions (for example, dropping the ball)
+        # while also ending an environment immediately on a rewarded step.
+        for key in ("done", "terminated"):
+            terminal = td.get(key, None)
+            if terminal is None:
+                continue
 
-        # ------------------ gt if close otherwise -1 ------------#
-        out_penalty = -1
+            terminal_success = success
+            while terminal_success.ndim < terminal.ndim:
+                terminal_success = terminal_success.unsqueeze(-1)
+            td.set(key, terminal | terminal_success.expand_as(terminal))
 
-        gt_reward = td.get((self.group, "reward"))
-
-
-        # Calculate success mask: 1.0 if close enough, else 0.0
-        success_mask = (dist < self.success_threshold).to(obs.dtype)
-        
-        # Reshape to match reward specs (..., n_agents, 1)
-        success_mask = success_mask.unsqueeze(-1)
-
-        # Calculate failure mask: 0.0 if close enough, else 1.0
-        failure_mask = 1.0 - success_mask
-
-        # Apply logic:
-        # 1. Keep gt_reward where success_mask is 1
-        # 2. Add -1.0 where failure_mask is 1 (which acts as the "else" condition)
-        new_reward = (gt_reward * success_mask) + (out_penalty * failure_mask)
-
-        # if torch.rand(1) < 0.01: 
-        #     # Select First Batch, First Agent (index [0, 0])
-        #     d_val = dist[0, 0].item() 
-        #     r_val = new_reward[0, 0].item()
-        #     gt_val = gt_reward[0, 0].item()
-            
-        #     print(f"--- Debug Reward (Agent 0, Env 0) ---")
-        #     print(f"Dist: {d_val:.4f} | Threshold: {self.success_threshold}")
-        #     print(f"GT Reward: {gt_val:.4f} | Out Penalty: {out_penalty}")
-        #     print(f"Final Reward: {r_val:.4f}")
-            
-        #     # Sanity Check Alert
-        #     if d_val > self.success_threshold and r_val > -self.success_threshold:
-        #          print("WARNING: Penalty is not harsh enough! Agent might stay outside.")
-
-        # Overwrite the default reward
-
-        td.set((self.group, "reward"), new_reward)
-
-        # print("NEW_REWARD", new_reward)
-        # print("GT_REWARD", gt_reward)
-        # print("Difference", new_reward - gt_reward)
-        # print("Success_mask", success_mask)
-        # print("Failure_mask", failure_mask)
-
-        #----------------------------------------------------------_#
-        
         return td
 
     def transform_reward_spec(self, reward_spec):
-        """
-        Ensures check_env_specs (and the environment in general) knows 
-        that we are providing a valid reward specification.
-        """
+        """Keep the transformed reward compatible with the environment spec."""
         if isinstance(reward_spec, CompositeSpec):
-            # We ensure the reward spec for our group matches our output
-            curr_spec = reward_spec[self.group, "reward"]
+            current_spec = reward_spec[self.group, "reward"]
             reward_spec[self.group, "reward"] = UnboundedContinuousTensorSpec(
-                shape=curr_spec.shape,
-                device=curr_spec.device,
-                dtype=curr_spec.dtype
+                shape=current_spec.shape,
+                device=current_spec.device,
+                dtype=current_spec.dtype,
             )
         return reward_spec

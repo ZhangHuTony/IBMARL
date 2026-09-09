@@ -9,6 +9,24 @@ from torch.utils.data import DataLoader
 from pathlib import Path
 
 
+class BCDataset(torch.utils.data.Dataset):
+    """The online R2BC dataset format used by the original implementation."""
+
+    def __init__(self, states, actions, agent_index=None, total_demos=0):
+        self.states = states
+        self.actions = actions
+        self.indices = agent_index
+        self.total_demos = total_demos
+
+    def __len__(self):
+        return len(self.states)
+
+    def __getitem__(self, idx):
+        if self.indices is not None:
+            return self.states[idx], self.actions[idx], self.indices[idx]
+        return self.states[idx], self.actions[idx], torch.tensor([-1])
+
+
 class MiniBC(torch.nn.Module):
     def __init__(self, agent_id, in_size, out_size, hidden_size=8, hidden_layers=1, *args, **kwargs):
         super().__init__(*args, **kwargs)

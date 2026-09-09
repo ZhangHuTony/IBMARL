@@ -56,3 +56,7 @@ dist/
 # --------------------
 tmp/
 scratch/
+
+# Optional R2BC learned-supervisor source dependencies (see src/r2bc/external_libs/README.md)
+src/r2bc/external_libs/HetGPPO/
+src/r2bc/external_libs/rllib_differentiable_comms/

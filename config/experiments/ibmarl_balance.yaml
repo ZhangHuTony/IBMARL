@@ -6,8 +6,8 @@
 # dense rewards.  Deliberately sub-optimal budget -- R2BC's own balance.yaml notes ~-220
 # mean return at 36 demos, against ~-1700 for random actions and ~+125 for a converged
 # policy.
-r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/balance_r2bc_decent_20260823_185058/policy_checkpoint.pth"
-demonstrations_path: "/home/tony-zhang/Research/R2BC/results/balance_r2bc_decent_20260823_185058/demonstrations.pt"
+r2bc_checkpoint_path: "results/balance_r2bc_decent_20260908_102619/policy_checkpoint.pth"
+demonstrations_path: "results/balance_r2bc_decent_20260908_102619/demonstrations.pt"
 
 # 10,800 demo transitions against 1.5M collected frames.  Navigation collects 300k against a
 # 200k buffer, so its demos survive to ~iter 200/300 (67% of the run).  At 200k here the ring

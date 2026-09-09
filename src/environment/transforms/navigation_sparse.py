@@ -52,63 +52,27 @@ class NavigationSparseReward(Transform):
 
         dist = self._compute_dist(obs)
 
-        #----1.0 if close otherwise 0-------------------#
-        
-        # Calculate sparse reward: 1.0 if close enough, else 0.0
-        # success = (dist < self.success_threshold).to(obs.dtype)
-        
-        # # Reshape to (..., n_agents, 1) to match TorchRL reward specs
-        # reward = success.unsqueeze(-1)
+        current_reward = td.get((self.group, "reward"))
 
-        # # Overwrite the default reward with our sparse version
-        # td.set((self.group, "reward"), reward)
-        #--------------------------------------------------------#
+        # Navigation is a cooperative task: the episode succeeds once every
+        # agent is on its goal.  Emit one shared success reward on that terminal
+        # transition, rather than repeatedly rewarding agents that arrived
+        # before their teammates.
+        success = (dist < self.success_threshold).all(dim=-1)
+        reward_success = success
+        while reward_success.ndim < current_reward.ndim:
+            reward_success = reward_success.unsqueeze(-1)
+        reward = reward_success.to(current_reward.dtype).expand_as(current_reward)
+        td.set((self.group, "reward"), reward)
 
-        # ------------------ gt if close otherwise -1 ------------#
-        out_penalty = -1
-
-        gt_reward = td.get((self.group, "reward"))
-
-
-        # Calculate success mask: 1.0 if close enough, else 0.0
-        success_mask = (dist < self.success_threshold).to(obs.dtype)
-        
-        # Reshape to match reward specs (..., n_agents, 1)
-        success_mask = success_mask.unsqueeze(-1)
-
-        # Calculate failure mask: 0.0 if close enough, else 1.0
-        failure_mask = 1.0 - success_mask
-
-        # Apply logic:
-        # 1. Keep gt_reward where success_mask is 1
-        # 2. Add -1.0 where failure_mask is 1 (which acts as the "else" condition)
-        new_reward = (gt_reward * success_mask) + (out_penalty * failure_mask)
-
-        # if torch.rand(1) < 0.01: 
-        #     # Select First Batch, First Agent (index [0, 0])
-        #     d_val = dist[0, 0].item() 
-        #     r_val = new_reward[0, 0].item()
-        #     gt_val = gt_reward[0, 0].item()
-            
-        #     print(f"--- Debug Reward (Agent 0, Env 0) ---")
-        #     print(f"Dist: {d_val:.4f} | Threshold: {self.success_threshold}")
-        #     print(f"GT Reward: {gt_val:.4f} | Out Penalty: {out_penalty}")
-        #     print(f"Final Reward: {r_val:.4f}")
-            
-        #     # Sanity Check Alert
-        #     if d_val > self.success_threshold and r_val > -self.success_threshold:
-        #          print("WARNING: Penalty is not harsh enough! Agent might stay outside.")
-
-        # Overwrite the default reward
-        td.set((self.group, "reward"), new_reward)
-
-        # print("NEW_REWARD", new_reward)
-        # print("GT_REWARD", gt_reward)
-        # print("Difference", new_reward - gt_reward)
-        # print("Success_mask", success_mask)
-        # print("Failure_mask", failure_mask)
-
-        #----------------------------------------------------------_#
+        for key in ("done", "terminated"):
+            terminal = td.get(key, None)
+            if terminal is None:
+                continue
+            terminal_success = success
+            while terminal_success.ndim < terminal.ndim:
+                terminal_success = terminal_success.unsqueeze(-1)
+            td.set(key, terminal | terminal_success.expand_as(terminal))
         
         return td
 

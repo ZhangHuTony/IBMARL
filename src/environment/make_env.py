@@ -1,6 +1,7 @@
 from torchrl.envs import VmasEnv, TransformedEnv, check_env_specs
 from torchrl.envs.transforms import RewardSum
 from src.environment.transforms.registry import build_transforms
+from src.environment.scenarios.balance_sparse import SparseRewardBalanceScenario
 from src.environment.scenarios.buzz_wire_sparse import SparseRewardBuzzWireScenario
 
 def make_env(config: dict, device) -> TransformedEnv:
@@ -47,19 +48,19 @@ def make_env(config: dict, device) -> TransformedEnv:
 def resolve_scenario(config: dict):
     """
     Return what VmasEnv should build: usually the scenario name string, but for
-    sparse buzz_wire a scenario INSTANCE (torchrl forwards it to vmas.make_env
-    untouched). The sparse reward there needs the ball's position, which is not
-    in the observation, so it cannot be a TorchRL transform like the other
-    scenarios' sparse rewards (see src/environment/scenarios/buzz_wire_sparse.py).
+    sparse balance or buzz_wire a scenario INSTANCE (torchrl forwards it to
+    vmas.make_env untouched). Their exact native goal predicates require
+    simulator state which is not fully represented in observations.
     A fresh instance per call is essential: the train, eval, and render envs
     each need their own simulator state.
     """
     scenario = config.get("scenario_name")
+    if scenario == "balance" and config.get("sparse_rewards", False):
+        print("Using SparseRewardBalanceScenario (native on-goal predicate)")
+        return SparseRewardBalanceScenario()
     if scenario == "buzz_wire" and config.get("sparse_rewards", False):
-        print("Using SparseRewardBuzzWireScenario (scenario-level sparse reward + done suppression)")
-        return SparseRewardBuzzWireScenario(
-            success_threshold=config.get("gt_radius", 0.1)
-        )
+        print("Using SparseRewardBuzzWireScenario (native on-goal predicate)")
+        return SparseRewardBuzzWireScenario()
     return scenario
 
 

@@ -5,7 +5,7 @@ from torchrl.data import UnboundedContinuousTensorSpec, CompositeSpec
 class TransportSparseReward(Transform):
     """
     Sparse reward for transport:
-    reward = gt_reward if every package is on its goal, else -1.
+    reward = 1 if every package is on its goal, else 0.
 
     Success is read off the ``on_goal`` flag VMAS already writes into the
     observation rather than a distance threshold, for two reasons:
@@ -14,11 +14,8 @@ class TransportSparseReward(Transform):
       (``all(package.on_goal)``), so the success reward and the episode
       termination stay in sync.  A ``gt_radius``-style threshold would fire
       before or after the episode actually ends.
-    * VMAS ``transport.reward()`` only accumulates shaping for packages *not*
-      on goal (``self.rew[~package.on_goal] += ...``), so ``gt_reward`` is
-      exactly 0.0 on a success step.  The reward this transform emits is
-      therefore -1 per step until the package is delivered and 0 thereafter --
-      the same shape as the navigation sparse reward, with nothing to tune.
+    The success transition also terminates the episode, keeping every episode
+    return in the interval [0, 1].
 
     Like the navigation/balance transforms, this overrides _call directly to
     avoid the NotImplementedError caused by the base Transform class trying to
@@ -30,7 +27,6 @@ class TransportSparseReward(Transform):
         *,
         group: str = "agents",
         n_packages: int = 1,
-        out_penalty: float = -1.0,
     ):
         # We initialize the base class without in_keys/out_keys.
         # This prevents the base class from trying to run its automated
@@ -39,7 +35,6 @@ class TransportSparseReward(Transform):
 
         self.group = group
         self.n_packages = n_packages
-        self.out_penalty = out_penalty
 
         # Per-agent observation layout is
         #   pos(2) + vel(2) + n_packages * [pkg-goal(2), pkg-agent(2), pkg_vel(2), on_goal(1)]
@@ -61,16 +56,25 @@ class TransportSparseReward(Transform):
         # that the environment just populated during its internal _step.
         obs = td.get((self.group, "observation"))
 
-        gt_reward = td.get((self.group, "reward"))
+        current_reward = td.get((self.group, "reward"))
 
         # Reshape to match reward specs (..., n_agents, 1)
-        success_mask = self._compute_success(obs).unsqueeze(-1)
-        failure_mask = 1.0 - success_mask
+        success_by_agent = self._compute_success(obs)
+        success = success_by_agent.all(dim=-1)
+        reward_success = success
+        while reward_success.ndim < current_reward.ndim:
+            reward_success = reward_success.unsqueeze(-1)
+        reward = reward_success.to(current_reward.dtype).expand_as(current_reward)
+        td.set((self.group, "reward"), reward)
 
-        # Keep gt_reward (== 0.0 for transport) on success, -1.0 otherwise.
-        new_reward = (gt_reward * success_mask) + (self.out_penalty * failure_mask)
-
-        td.set((self.group, "reward"), new_reward)
+        for key in ("done", "terminated"):
+            terminal = td.get(key, None)
+            if terminal is None:
+                continue
+            terminal_success = success
+            while terminal_success.ndim < terminal.ndim:
+                terminal_success = terminal_success.unsqueeze(-1)
+            td.set(key, terminal | terminal_success.expand_as(terminal))
 
         return td
 

@@ -4,10 +4,8 @@
 extends: "../base.yaml"
 
 # Environment specific parameters
-n_agents: 3          # ignored by make_env (no balance branch); VMAS default is 3 anyway
+n_agents: 3
 horizon: 300         # matches the R2BC recording horizon for the balance demos
-# gt_radius: 0.95
-gt_radius: 1.05      # only read by BalanceSparseReward, i.e. only when sparse_rewards: True
 
 # horizon 300 against base.yaml's frames_per_batch 1000 gives 3 parallel VMAS sub-envs
 # (navigation gets 10) and a 900-vs-1000 frames-per-batch mismatch.  3000 restores 10
@@ -16,5 +14,5 @@ frames_per_batch: 3000
 
 # The balance demos carry raw dense VMAS rewards, so train dense to keep one reward
 # scale in the replay buffer.  Flip to True (or pass --sparse) to route through
-# BalanceSparseReward -- but relabel the demo rewards first.
-sparse_rewards: False
+# the native package-on-goal sparse scenario -- but relabel the demo rewards first.
+sparse_rewards: True

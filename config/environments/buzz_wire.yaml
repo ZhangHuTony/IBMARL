@@ -1,4 +1,4 @@
-# Buzz-wire environment configuration (sparse fixed-horizon variant via
+# Buzz-wire environment configuration (binary sparse success variant via
 # SparseRewardBuzzWireScenario - see src/environment/scenarios/buzz_wire_sparse.py)
 
 #Inherit from the base configuration
@@ -22,11 +22,7 @@ n_iters: 75
 # of curve resolution only. Wider sub-env batch also means one eval rollout now
 # yields 40 episodes instead of 20 -- better statistics, half the rollouts.
 eval_interval: 4
-# Sparse basin radius on ||ball - goal||: 10x the native success predicate
-# (0.01), below the corridor half-width (0.125) so "inside" means "at the goal".
-# Baked into the recorded demonstration rewards - changing it requires
-# re-collecting demos in R2BC with the matching threshold.
-gt_radius: 0.1
+# Sparse success uses VMAS's native ball-on-goal predicate (distance <= 0.01).
 
 # UTD parity with the pilot: 8000 frames/iter x 0.25 = 2000 optimiser steps,
 # i.e. 75 x 2000 = 150,000 total gradient steps, identical to 300 x 500. The
