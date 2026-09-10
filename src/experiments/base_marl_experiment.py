@@ -130,6 +130,7 @@ class BaseMARLExperiment(ResumeMixin):
     def _setup_seed(self):
         self.seed = self.config.get('seed', None)
         np.random.seed(self.seed)
+        random.seed(self.seed)
         torch.manual_seed(self.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.seed)

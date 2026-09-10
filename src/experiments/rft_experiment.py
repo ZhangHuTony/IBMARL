@@ -216,6 +216,7 @@ class RftExperiment(MaddpgExperiment):
 
         start_time = time.time()
         elapsed_offset = counters["elapsed"]
+        elapsed = elapsed_offset
         total_frames = counters["total_frames"]
         total_episodes = counters["total_episodes"]
         total_train_steps = counters["total_train_steps"]
@@ -350,7 +351,15 @@ class RftExperiment(MaddpgExperiment):
             pbar.update()
 
         self.metrics_logger.save()
-        self.clear_resume()
+        self.save_final_resume(
+            int(self.config["n_iters"]) - 1,
+            {
+                "total_frames": total_frames,
+                "total_episodes": total_episodes,
+                "total_train_steps": total_train_steps,
+                "elapsed": elapsed,
+            },
+        )
 
         first_group = list(self.env.group_map.keys())[0]
         recent = self.metrics_logger.get_values("episode_reward_mean", first_group)[-10:]

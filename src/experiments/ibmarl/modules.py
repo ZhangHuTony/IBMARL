@@ -23,7 +23,9 @@ def build_il_noise_modules(cfg, env, device):
         spec = env.full_action_spec_unbatched[group, "action"].to(device)
         module = AdditiveGaussianModule(
             spec=spec,
-            annealing_num_steps=cfg.get("total_frames") // 2,
+            annealing_num_steps=cfg.get(
+                "exploration_annealing_frames", cfg.get("total_frames") // 2
+            ),
             action_key=(group, "action"),
             sigma_init=sigma_init,
             sigma_end=sigma_end,
@@ -121,7 +123,9 @@ def build_exploration_policy_with_noise(policy, spec, cfg, group):
     
     noise_module = AdditiveGaussianModule(
         spec=spec,
-        annealing_num_steps=cfg.get('total_frames') // 2,
+        annealing_num_steps=cfg.get(
+            "exploration_annealing_frames", cfg.get("total_frames") // 2
+        ),
         action_key=(group, "action"),
         sigma_init=sigma_init,
         sigma_end=sigma_end,
@@ -140,4 +144,3 @@ def build_exploration_policy_with_noise(policy, spec, cfg, group):
     # When ExplorationType.MODE is set, it won't add noise
     # When ExplorationType.RANDOM is set, it will add noise
     return TensorDictSequential(policy, noise_module)
-

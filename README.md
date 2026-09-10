@@ -7,6 +7,20 @@ To run maddpg:
 To run ibmarl:
  `python -m src.run_experiment navigation ibmarl --render`
 
+Runs save a full training checkpoint under `checkpoints/resume/`, including
+networks, target networks, optimizers, replay buffers, exploration schedules,
+RNG states, counters, and metrics. The latest checkpoint is kept after normal
+completion, so a 1000-iteration run can later be extended in place:
+
+```
+python -m src.run_experiment --resume results/ibmarl_balance_<timestamp> --n-iters 1500
+```
+
+For demonstration-based experiments, the teacher checkpoint and demonstration
+dataset are copied into the run's `artifacts/` directory at creation time. This
+makes the run self-contained for later resumption. `--n-iters` is a total target,
+not the number of additional iterations.
+
 To run RLfD:
  `python -m src.run_experiment navigation rlfd --render`
 
