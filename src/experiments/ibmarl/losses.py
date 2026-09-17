@@ -30,6 +30,19 @@ class GroupTrainer:
 
         self.num_critics = cfg["num_critics"]
 
+        # Gated imitation term (CONTEXT.md).  Off unless actor_reg.mode is set,
+        # in which case the plain MADDPG actor loss is unchanged and a term is
+        # *added* -- see _ibmarl_actor_loss.
+        reg = cfg.get("actor_reg") or {}
+        self.reg_mode = str(reg.get("mode", "none"))
+        if self.reg_mode not in ("none", "gated", "uniform"):
+            raise ValueError(
+                f"actor_reg.mode must be none|gated|uniform, got {self.reg_mode!r}"
+            )
+        self.reg_alpha = float(reg.get("alpha", 0.0))
+        self.reg_hard_gate = str(reg.get("gate", "soft")) == "hard"
+        temp = reg.get("temperature")
+        self.reg_temperature = None if temp is None else float(temp)
 
         self.optimisers = self._build_optimisers()
 
@@ -49,7 +62,7 @@ class GroupTrainer:
         return {"critic_loss": critic_loss_val}
 
     def update_actor(self, group, minibatch) -> dict:
-        loss_actor = self._ibmarl_actor_loss(group, minibatch)
+        loss_actor, reg_info = self._ibmarl_actor_loss(group, minibatch)
         actor_loss_val = loss_actor.item()
 
         opt_actor = self.optimisers[group]["loss_actor"]
@@ -58,7 +71,7 @@ class GroupTrainer:
         torch.nn.utils.clip_grad_norm_(opt_actor.param_groups[0]["params"], self.max_grad_norm)
         opt_actor.step()
 
-        return {"actor_loss": actor_loss_val}
+        return {"actor_loss": actor_loss_val, **reg_info}
     
     
     def polyak_step(self, source, target):
@@ -148,13 +161,31 @@ class GroupTrainer:
         # single-critic number and remains comparable across runs.
         return torch.stack(member_losses).mean()
     
-    def _ibmarl_actor_loss(self, group: str, mb: TensorDictBase) -> torch.Tensor:
+    def _ibmarl_actor_loss(self, group: str, mb: TensorDictBase):
         """
         MADDPG-style actor loss (same as RLFD): L_actor = -E[ Q(obs, pi(obs)) ].
         Deliberately scores against critic 0 alone rather than the ensemble: members
         are trained on identical targets from identical minibatches, so the choice is
         near-neutral, and keeping a single critic preserves parity with the
         MADDPG/RLFD baselines this method is compared against.
+
+        With ``actor_reg.mode`` set, the gated imitation term is added:
+
+            alpha * mean|Q_tot| * E_o[ gate(o) * ||pi_theta(o) - pi_teacher(o)||^2 ]
+
+        The DPG term above can only climb Q locally at the actor's own action, so
+        it never learns from the teacher's executed actions even when the critic
+        scores them higher (the actor lags the arbitrated policy).  The added term
+        pulls the actor straight toward the teacher's proposal, weighted by the
+        arbiter's own preference for it at that observation, so it switches off
+        state by state as the actor overtakes the teacher.  ``uniform`` holds the
+        gate open (the RFT-like control).  The term is scaled by the detached
+        minibatch mean |Q_tot| rather than the DPG term being normalised, so the
+        ``none`` path and its grad-clip behaviour are byte-identical to before.
+
+        Returns ``(loss, info)`` where info carries the diagnostics ``reg_mse``
+        (unweighted mean squared distance to the teacher) and ``gate_mean``
+        (mean gate over the minibatch), both None when the term is off.
         """
         obs = mb[(group, "observation")]
         B = obs.shape[0]
@@ -176,4 +207,25 @@ class GroupTrainer:
             q_tot = q.sum(dim=1).squeeze(-1)
         else:
             q_tot = q.squeeze(-1)
-        return -q_tot.mean()
+        loss = -q_tot.mean()
+        info = {"reg_mse": None, "gate_mean": None}
+        if self.reg_mode == "none":
+            return loss, info
+
+        with torch.no_grad():
+            a_il = self.action_arbiter.il_policy.get_action(group, obs)   # [B, N, A]
+            if self.reg_mode == "gated":
+                gate, _, _ = self.action_arbiter.teacher_preference(
+                    group,
+                    obs,
+                    a_pi.detach(),
+                    temperature=self.reg_temperature,
+                    hard=self.reg_hard_gate,
+                )
+            else:
+                gate = torch.ones(B, device=obs.device)
+            q_scale = q_tot.abs().mean()
+        bc = ((a_pi - a_il) ** 2).mean(dim=(1, 2))                          # [B]
+        loss = loss + self.reg_alpha * q_scale * (gate * bc).mean()
+        info = {"reg_mse": bc.mean().item(), "gate_mean": gate.mean().item()}
+        return loss, info
