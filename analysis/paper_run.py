@@ -47,9 +47,49 @@ VARIANTS: dict[str, tuple[str, dict]] = {
 }
 
 
-def _ibmarl_bc_checkpoint() -> str:
-    with open(Path("config") / "experiments" / "ibmarl.yaml") as f:
-        return yaml.safe_load(f)["r2bc_checkpoint_path"]
+def _gated(alpha: float, mode: str = "gated") -> tuple[str, dict]:
+    """
+    IBMARL (strict) plus the gated imitation term at *alpha* (config
+    actor_reg; see CONTEXT.md).  The override is the whole ``actor_reg`` dict
+    because build_cfg applies overrides with a flat ``cfg.update``.  Variants
+    are named by alpha so a pilot seed is reused, not re-run, once alpha is
+    chosen.  ``mode="uniform"`` is the gate-held-open control, registered
+    separately below under an ``ibmarl_strict_uniform_a*`` name.
+    """
+    return ("ibmarl", {"strict": True, "actor_reg": {
+        "mode": mode, "alpha": alpha, "gate": "soft", "temperature": 0.05}})
+
+
+# --- actor-lag experiment (results/buzzwire3_reg; not in paper_sweep.JOBS) ---
+VARIANTS.update({f"ibmarl_strict_gated_a{a:g}": _gated(a) for a in (0.1, 0.4, 1.6)})
+
+# The gate-held-open control at the chosen alpha: same pull toward the teacher,
+# applied at every observation instead of only where the arbiter prefers the
+# teacher.  It separates "gating by the critic" from "any imitation term at
+# all", and is the in-method twin of the RFT baseline (whose BC term is
+# ungated and annealed on a clock rather than by the critic).
+VARIANTS.update({f"ibmarl_strict_uniform_a{a:g}": _gated(a, mode="uniform")
+                 for a in (0.4,)})
+
+
+def _ibmarl_bc_checkpoint(scenario: str) -> str:
+    """
+    The teacher checkpoint the demo-based methods are given for *scenario*.
+
+    Prefers the per-scenario overlay (config/experiments/ibmarl_<scenario>.yaml) and falls
+    back to the base ibmarl.yaml, mirroring load_config's merge order.  Without the overlay
+    lookup this silently handed every scenario the navigation teacher.
+    """
+    exp_dir = Path("config") / "experiments"
+    for name in (f"ibmarl_{scenario}.yaml", "ibmarl.yaml"):
+        path = exp_dir / name
+        if not path.exists():
+            continue
+        with open(path) as f:
+            cfg = yaml.safe_load(f) or {}
+        if "r2bc_checkpoint_path" in cfg:
+            return cfg["r2bc_checkpoint_path"]
+    raise KeyError(f"No r2bc_checkpoint_path found for scenario {scenario!r}")
 
 
 def build_cfg(
@@ -60,6 +100,8 @@ def build_cfg(
     n_opt_steps: int | None = None,
     tag: str | None = None,
     resume_interval: int | None = None,
+    sigma_init: float | None = None,
+    sigma_end: float | None = None,
 ) -> dict:
     if variant not in VARIANTS:
         raise KeyError(f"Unknown variant {variant!r}. Known: {sorted(VARIANTS)}")
@@ -68,7 +110,7 @@ def build_cfg(
     cfg = load_config(scenario, exp_type)
     overrides = dict(overrides)
     if overrides.pop("__use_ibmarl_bc_checkpoint__", False):
-        cfg["r2bc_checkpoint_path"] = _ibmarl_bc_checkpoint()
+        cfg["r2bc_checkpoint_path"] = _ibmarl_bc_checkpoint(scenario)
     cfg.update(overrides)
     cfg["seed"] = seed
     cfg["render"] = False
@@ -79,6 +121,16 @@ def build_cfg(
         cfg["training"]["n_optimiser_steps"] = n_opt_steps
     if resume_interval is not None:
         cfg["resume_interval"] = resume_interval
+    # Exploration-noise overrides, mirroring src.run_experiment's --sigma_init/--sigma_end.
+    # Both the RL actor's noise and the teacher-proposal noise read this same block
+    # (ibmarl/modules.py), so these anneal each of them.
+    if sigma_init is not None or sigma_end is not None:
+        noise = dict(cfg.get("exploration_noise") or {})
+        if sigma_init is not None:
+            noise["sigma_init"] = sigma_init
+        if sigma_end is not None:
+            noise["sigma_end"] = sigma_end
+        cfg["exploration_noise"] = noise
 
     root = Path("results") / (tag or "paper")
     run_dir = root / variant / f"seed_{seed}"
@@ -122,6 +174,18 @@ def main() -> int:
         help="Results subdirectory under results/ (default: 'paper').",
     )
     parser.add_argument(
+        "--sigma-init",
+        type=float,
+        default=None,
+        help="Override exploration_noise.sigma_init (IBMARL variants).",
+    )
+    parser.add_argument(
+        "--sigma-end",
+        type=float,
+        default=None,
+        help="Override exploration_noise.sigma_end (IBMARL variants).",
+    )
+    parser.add_argument(
         "--resume-interval",
         type=int,
         default=None,
@@ -137,6 +201,8 @@ def main() -> int:
         args.n_opt_steps,
         args.tag,
         args.resume_interval,
+        args.sigma_init,
+        args.sigma_end,
     )
     run_dir = Path(cfg["run_dir"])
 

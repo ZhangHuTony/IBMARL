@@ -32,25 +32,52 @@ RESULTS_ROOT = Path("results")
 MAIN_SEEDS = [0, 1, 2, 3, 4]
 ABLATION_SEEDS = [0, 1, 2]
 
+# The paper-3 final plan: 5 seeds for the main comparison (ibmarl_strict is the
+# paper's IBMARL) plus the per-agent-mixing ablation, 3 seeds for the strict
+# one-factor ablations. The old mixing-base ablations (ibmarl_hard,
+# ibmarl_1critic) are not in the paper and were dropped. NOTE: the paper3
+# navigation sweep on disk was produced by an earlier JOBS table plus follow-up
+# --only invocations; do not re-run --tag paper3 with this table.
 JOBS: list[tuple[str, list[int]]] = [
     # IL reference line: no training, seconds per seed. Runs first so the
     # reference number exists on disk before any learning curve does.
     ("bc_eval", ABLATION_SEEDS),
+    ("ibmarl_strict", MAIN_SEEDS),
     ("ibmarl", MAIN_SEEDS),
     ("maddpg", MAIN_SEEDS),
     ("rlfd", MAIN_SEEDS),
     ("rft", MAIN_SEEDS),
-    ("ibmarl_strict", ABLATION_SEEDS),
-    ("ibmarl_hard", ABLATION_SEEDS),
-    ("ibmarl_1critic", ABLATION_SEEDS),
+    ("ibmarl_strict_hard", ABLATION_SEEDS),
+    ("ibmarl_strict_1critic", ABLATION_SEEDS),
 ]
 
 
 def job_list(
     only: list[str] | None, max_seeds: int | None = None
 ) -> list[tuple[str, int]]:
+    """
+    (variant, seed) pairs to run.  Without --only, the JOBS table.  With
+    --only, the named variants: those in JOBS keep their seed list, and any
+    other name registered in paper_run.VARIANTS (an ad-hoc experiment that
+    should not join the default sweep, e.g. the gated-imitation variants) gets
+    MAIN_SEEDS.  A name registered nowhere is an error rather than a silent
+    no-op, which is how a mistyped --only used to run zero jobs.
+    """
+    from analysis.paper_run import VARIANTS
+
+    table = list(JOBS)
+    if only:
+        in_table = {v for v, _ in JOBS}
+        for name in only:
+            if name in in_table:
+                continue
+            if name not in VARIANTS:
+                raise SystemExit(
+                    f"--only: unknown variant {name!r} (not in JOBS or paper_run.VARIANTS)"
+                )
+            table.append((name, MAIN_SEEDS))
     jobs = []
-    for variant, seeds in JOBS:
+    for variant, seeds in table:
         if only and variant not in only:
             continue
         for seed in seeds[:max_seeds] if max_seeds else seeds:
@@ -111,6 +138,11 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=3, help="concurrent runs")
     parser.add_argument("--threads", type=int, default=4, help="torch threads per run")
     parser.add_argument("--tag", default="paper")
+    parser.add_argument(
+        "--scenario",
+        default="navigation",
+        help="Scenario for every job (forwarded to analysis.paper_run).",
+    )
     parser.add_argument(
         "--n-iters",
         type=int,
@@ -189,6 +221,7 @@ def main() -> int:
                 "analysis.paper_run",
                 "--variant", variant,
                 "--seed", str(seed),
+                "--scenario", args.scenario,
                 "--tag", args.tag,
                 "--resume-interval", str(args.resume_interval),
             ]

@@ -87,6 +87,16 @@ class MaddpgExperiment(BaseMARLExperiment):
 
             policies[group] = policy
         
+        # Read from the same `exploration_noise` block IBMARL reads
+        # (ibmarl/modules.py).  The values were hard-coded here at 0.1/0.1,
+        # numerically identical to ibmarl.yaml's defaults, so nothing changes
+        # today -- but a sigma sweep (paper_run --sigma-init/--sigma-end, or an
+        # edit to the yaml) moved IBMARL's exploration and silently left every
+        # baseline behind at 0.1.  Same source, same schedule, one knob.
+        noise_config = cfg.get('exploration_noise') or {}
+        sigma_init = noise_config.get('sigma_init', 0.1)
+        sigma_end = noise_config.get('sigma_end', 0.1)
+
         exploration_policies = {}
         for group, _agents in env.group_map.items():
             exploration_policy = TensorDictSequential(
@@ -95,8 +105,8 @@ class MaddpgExperiment(BaseMARLExperiment):
                     spec = policies[group].spec,
                     annealing_num_steps= cfg.get('total_frames') // 2,
                     action_key= (group, "action"),
-                    sigma_init = 0.1,
-                    sigma_end = 0.1,
+                    sigma_init = sigma_init,
+                    sigma_end = sigma_end,
                 )
             )
             exploration_policies[group] = exploration_policy
@@ -231,7 +241,7 @@ class MaddpgExperiment(BaseMARLExperiment):
             # skipped by MetricsLogger.log and dropped by the analysis scripts) ---
             eval_means = None
             if self.should_evaluate(iteration):
-                eval_means = self.evaluate(n_episodes=20)
+                eval_means = self.evaluate_at_iteration(iteration, n_episodes=20)
 
             # --- Metrics ---
             elapsed = elapsed_offset + (time.time() - start_time)

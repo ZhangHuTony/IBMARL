@@ -46,15 +46,33 @@ def vmas_rng_guard():
     The restore must be an in-place slice assignment: ``local_seed`` closed over
     the list object at class-definition time, so rebinding the attribute would
     not be seen.
+
+    The CUDA generator has to be restored here as well, and it is the reason the
+    guard did not originally deliver what this docstring promises.  ``vmas``'s
+    ``local_seed`` saves and restores the global *CPU* streams (torch, numpy,
+    random) around each decorated call, and this function covers the class-level
+    ``vmas_random_state`` -- but nothing covered ``torch.cuda``.  On a GPU run the
+    simulator draws from the CUDA generator, so an evaluation rollout advanced it
+    and the collector's next ``AdditiveGaussianModule`` sample (also on device)
+    came out different: evaluating changed what was subsequently trained on,
+    exactly the leak the guard exists to close.  Measured on maddpg/transport,
+    seed 0: identical training returns for two runs at the same eval schedule,
+    but a divergence from iteration 2 between eval-every-iteration and
+    eval-never.  Restoring all devices' states closes it.
     """
     from vmas.simulator.environment.environment import Environment
 
     state = Environment.vmas_random_state
     snapshot = [state[0].clone(), state[1], state[2]]
+    cuda_snapshot = (
+        torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    )
     try:
         yield
     finally:
         state[:] = snapshot
+        if cuda_snapshot is not None:
+            torch.cuda.set_rng_state_all(cuda_snapshot)
 
 
 class BaseMARLExperiment(ResumeMixin):
@@ -172,6 +190,28 @@ class BaseMARLExperiment(ResumeMixin):
         ``vmas_rng_guard``, which contains the reseed.
         """
         self.eval_env.set_seed(int(seed))
+
+    def evaluate_at_iteration(self, iteration: int, n_episodes: int = 20, **kwargs) -> dict:
+        """
+        ``evaluate`` on a *pinned, side-effect-free* episode set for *iteration*.
+
+        Every VMAS environment in the process shares one RNG stream (see
+        ``vmas_rng_guard``), so an unguarded evaluation rollout shifts the
+        resets the collector subsequently draws: measuring a baseline perturbs
+        the very training data it is measuring.  IBMARL has always run its two
+        protocols inside the guard with the eval env pinned to
+        ``seed + 10_000 + iteration``; the baselines called ``evaluate``
+        bare, which left them exposed to that feedback AND measured them on a
+        different set of episodes than IBMARL saw at the same iteration.
+
+        Routing every learner through this helper makes the comparison paired:
+        at a given (seed, iteration) all variants are scored on identical
+        initial conditions, and none of them can evaluate its way into
+        different training data.
+        """
+        with vmas_rng_guard():
+            self.reseed_eval_env(self.config.get("seed", 0) + 10_000 + iteration)
+            return self.evaluate(n_episodes=n_episodes, **kwargs)
 
     def evaluate(
         self,

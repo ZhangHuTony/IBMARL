@@ -283,7 +283,7 @@ class RlfdExperiment(MaddpgExperiment):
             # skipped by MetricsLogger.log and dropped by the analysis scripts) ---
             eval_means = None
             if self.should_evaluate(iteration):
-                eval_means = self.evaluate(n_episodes=20)
+                eval_means = self.evaluate_at_iteration(iteration, n_episodes=20)
 
             # --- Metrics ---
             elapsed = elapsed_offset + (time.time() - start_time)
