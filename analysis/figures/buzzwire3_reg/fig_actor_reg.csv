@@ -1,0 +1,5 @@
+variant,protocol,n,steps_k,reached,steps_k_reaching,final_mean,final_sd
+ibmarl_strict,RL+IL,5,168.0,5,168.0,-84.53578071594238,14.801717908354359
+ibmarl_strict,RL actor,5,392.0,5,392.0,-105.32274040222168,25.623459524575814
+ibmarl_strict_gated_a0.4,RL+IL,5,104.0,5,104.0,-70.43253814697266,4.656240057541194
+ibmarl_strict_gated_a0.4,RL actor,5,104.0,5,104.0,-71.1899111175537,6.779615106388656

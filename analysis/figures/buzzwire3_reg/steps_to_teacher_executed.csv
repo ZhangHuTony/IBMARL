@@ -1,0 +1,5 @@
+variant,n_seeds,n_reached,steps_to_teacher_median,steps_to_teacher_median_reaching,capped_at_budget,final_return_mean,final_return_sd
+ibmarl_strict,5,5,168000.0,168000.0,False,-84.53578071594238,14.801717908354359
+ibmarl_strict_gated_a0.1,2,2,136000.0,136000.0,False,-80.93292484283447,14.877747161502386
+ibmarl_strict_gated_a0.4,5,5,104000.0,104000.0,False,-70.43253814697266,4.656240057541194
+ibmarl_strict_gated_a1.6,2,2,120000.0,120000.0,False,-69.93754367828369,0.946217384166598
