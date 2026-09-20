@@ -47,20 +47,35 @@ VARIANTS: dict[str, tuple[str, dict]] = {
 }
 
 
-def _gated(alpha: float, mode: str = "gated") -> tuple[str, dict]:
+def _gated(alpha: float, mode: str = "gated", *,
+           strict: bool = True, **extra) -> tuple[str, dict]:
     """
-    IBMARL (strict) plus the gated imitation term at *alpha* (config
-    actor_reg; see CONTEXT.md).  The override is the whole ``actor_reg`` dict
-    because build_cfg applies overrides with a flat ``cfg.update``.  Variants
-    are named by alpha so a pilot seed is reused, not re-run, once alpha is
-    chosen.  ``mode="uniform"`` is the gate-held-open control, registered
-    separately below under an ``ibmarl_strict_uniform_a*`` name.
+    IBMARL plus the gated imitation term at *alpha* (config actor_reg; see
+    CONTEXT.md).  The override is the whole ``actor_reg`` dict because
+    build_cfg applies overrides with a flat ``cfg.update``.  Variants are named
+    by alpha so a pilot seed is reused, not re-run, once alpha is chosen.
+    ``mode="uniform"`` is the gate-held-open control.  ``strict`` selects the
+    base method: True for the joint all-IL/all-RL choice, False for per-agent
+    mixing.  ``**extra`` carries further one-factor deltas (soft, num_critics)
+    into the same flat override dict.
+
+    ``temperature`` is deliberately ABSENT from the actor_reg dict.  losses.py
+    reads it with ``reg.get("temperature")`` -> None, and arbiter.py then falls
+    back to the arbiter's own ``temperature``, so the gate is always scored at
+    the temperature execution-time arbitration uses.  Pinning a number here
+    instead silently desyncs the two on any task that overrides the arbiter
+    temperature: transport pins 0.05 (ibmarl_transport.yaml) against
+    ibmarl.yaml's 0.0005, so a hard-coded 0.0005 gave it a gate 100x too sharp.
+    The flat ``cfg.update`` is what makes the omission effective -- it discards
+    ibmarl.yaml's actor_reg block wholesale, its 0.0005 included.  The
+    buzzwire3_reg runs on disk carry an explicit 0.05 in both slots; they were
+    frozen before the arbiter temperature was rescaled, and satisfy the same
+    invariant (gate temperature == arbiter temperature), not the same number.
     """
-    return ("ibmarl", {"strict": True, "actor_reg": {
-        # Gate temperature = the arbiter's, rescaled for the binary terminal
-        # schema (see ibmarl.yaml).  These variants are the buzz_wire actor-lag
-        # experiment; a legacy-schema task would need 0.05 here.
-        "mode": mode, "alpha": alpha, "gate": "soft", "temperature": 0.0005}})
+    cfg = {"strict": strict,
+           "actor_reg": {"mode": mode, "alpha": alpha, "gate": "soft"}}
+    cfg.update(extra)
+    return ("ibmarl", cfg)
 
 
 # --- actor-lag experiment (results/buzzwire3_reg; not in paper_sweep.JOBS) ---
@@ -73,6 +88,19 @@ VARIANTS.update({f"ibmarl_strict_gated_a{a:g}": _gated(a) for a in (0.1, 0.4, 1.
 # ungated and annealed on a clock rather than by the critic).
 VARIANTS.update({f"ibmarl_strict_uniform_a{a:g}": _gated(a, mode="uniform")
                  for a in (0.4,)})
+
+# --- the main method, as of 2026-09-20 (results/transport800) ------------
+# IBMARL is per-agent MIXING plus the gated imitation term.  `strict=False`
+# restates ibmarl.yaml's default explicitly so the frozen config.yaml is
+# unambiguous and a later change to that default cannot silently redefine the
+# method.  Its one-factor ablations sit beside it; `ibmarl_strict_gated_a0.4`
+# above doubles as the "w/o mixing" arm and plain `ibmarl` as the "w/o
+# regularisation" arm, so neither needs a new name.
+VARIANTS["ibmarl_gated_a0.4"] = _gated(0.4, strict=False)
+# w/o critic ensemble: one critic instead of three, in arbitration and in the
+# gate alike (both go through ActionArbiter._sample_critic_indices).  Also
+# answers the standing objection that IBMARL gets 3 critics to each baseline's 1.
+VARIANTS["ibmarl_gated_a0.4_1critic"] = _gated(0.4, strict=False, num_critics=1)
 
 
 def build_cfg(
