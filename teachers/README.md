@@ -15,7 +15,7 @@ working directory.
 | task | R2BC run (source of every file below) | files |
 |---|---|---|
 | navigation | `navigation_r2bc_decent_20260129_201300` — 24 demos, collected against a 0.4-radius sparse basin | `policy_checkpoint.pth`, `demonstrations.pt`, `demonstrations_binary.pt`, `metadata.json` |
-| buzz_wire | `buzzwire_r2bc_decent_20260826_225653` — 12 demos (`--total_demonstrations 12 --total_samples 6`) | same four |
+| buzz_wire | `buzzwire_r2bc_decent_20260920_141123` — 6 demos (`--total_demonstrations 6 --total_samples 3`) | same four |
 | balance | `balance_r2bc_decent_20260823_185058` | `policy_checkpoint.pth`, `demonstrations.pt`, `metadata.json` |
 | transport | `transport_r2bc_decent_20260821_154402` | `policy_checkpoint.pth`, `metadata.json` — **demos not bundled** |
 
@@ -46,10 +46,20 @@ still uses the legacy schema and loads `demonstrations.pt` directly.
 
 Caveat for buzz_wire: online, wall contact ends the episode with 0, but the
 recording cannot reveal collisions (the ball is not in the observation), so
-relabelled episodes are cut at the basin regardless of an earlier touch.  The
-teacher collides before success in roughly 8% of its successful episodes, so
-the demo file is optimistic by about that much.  Kept as is rather than
-re-collecting, which would also have changed the teacher (2026-09-19).
+relabelled episodes are cut at the basin regardless of an earlier touch, and
+the demo file is optimistic by however often that happens.  The 8% figure
+measured for the 12-demo teacher (2026-09-19) does NOT carry over to the
+6-demo teacher bundled today: collision rate is exactly what the demo-count
+cliff is made of (see config/experiments/ibmarl_buzz_wire.yaml), so a weaker
+teacher scrapes the wire more often.  Unmeasured for this teacher; its 4-of-6
+relabelled successes are an upper bound on what it would score online.
+
+Teacher swapped from 12 demos to 6 on 2026-09-20 to open RL headroom: 0.770
++/- 0.021 success against the 12-demo teacher's 0.882 +/- 0.016 (bc_eval, 400
+episodes).  The demonstrations were swapped with it -- they come from the same
+run -- so the demo budget the RLfD/RFT baselines and the IBMARL buffer
+pre-load consume halved too, from 1,698 relabelled transitions to 855.  Curves
+recorded before this date used the 12-demo teacher and a double-size demo set.
 
 ## Transport demonstrations
 

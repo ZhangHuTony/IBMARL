@@ -4,45 +4,62 @@
 # its default.
 
 # R2BC teacher distilled from the tuned SimpleBuzzwireHeuristic demonstrator
-# (target_x 0.5, gain 4.0, sparse return ~-74.5): 12 demonstrations, 2,400
-# transitions, sparse rewards (gt_radius 0.1, fixed 200-step horizon).
+# (target_x 0.5, gain 4.0): 6 demonstrations, 1,200 transitions, collected with
+# gt_radius 0.1 on a fixed 200-step horizon.
 #
-# DELIBERATELY WEAKENED from the 16-demo teacher used through buzzwire2 (-80.6),
-# which left the RL side almost nothing to gain.  12 is the closest point below
-# it on the demo-count curve; the curve is a shelf then a cliff, so there is no
-# ~-125 teacher to be had at this granularity.
+# DELIBERATELY WEAKENED from the 12-demo teacher used through buzzwire3, to open
+# headroom for the RL side: 0.770 success against 0.882, i.e. 23 points of room
+# to improve instead of 12.
 #
-# Curve at 2-demo resolution, seed 0, 50-episode eval.  Both runs below are the
-# same trajectory, so the 12-demo checkpoint IS the curve's 12-demo point:
-#   results/buzzwire_r2bc_decent_20260826_221557 (2..16, granularity 2)
-#     2: -184.3   4: -179.5   6: -167.3   8: -165.1
-#    10: -132.2  12: -133.6  14:  -90.3  16:  -84.3
-#   results/buzzwire_r2bc_decent_20260826_225653 (the teacher itself, 12 demos)
+# Teacher level: 0.770 +/- 0.021 over 400 freshly-drawn episodes (2026-09-20).
 #
-# Teacher level: -133.6 +/- 5.7 (R2BC eval).  The weakening is NOT slowness --
-# median first arrival at the goal is step 70, the same as the 16-demo teacher's
-# 67.  It is (a) failure to HOLD the basin once reached (return counts steps
-# spent outside it: -124.5 on successful episodes vs -75.6) and (b) 12% of
-# episodes that never arrive at all (16-demo teacher: 4%).  Warm-up therefore
-# still sees ~88% successful teacher episodes, and both failure modes are ones
-# the RL side can plausibly fix.
+# WARNING -- bc_eval will NOT report that number.  Its eval env is fixed-seed
+# and yields exactly 40 episodes (n_episodes 20 vs n_envs 40 means
+# n_rollouts = ceil(20/40) = 1), and on that particular draw this teacher
+# scores 0.875 while the 12-demo teacher it replaced scores 0.850 -- i.e. the
+# protocol ranks the weakened teacher ABOVE the stronger one.  Separating
+# 0.770 from 0.882 at 2 sigma needs ~90 episodes; 40 gives +/-0.126.  The
+# weakening is real and the RL side does face it (warm-up and arbitration run
+# on freshly-seeded envs, not the eval set), but the reference line printed
+# next to the learning curves is not measuring it.  Raise the eval episode
+# count before reading any buzz_wire result as a success rate.
 #
-# The numbers above are in the legacy -1/step units.  Under binary_terminal_reward
-# (config/environments/buzz_wire.yaml) the teacher level is a success rate --
-# 9/12 = 0.75 on the relabelled demos, 0.875 by bc_eval (2026-09-19; wall
-# contact now ends the episode, which costs the teacher ~1 success in 12).
-# Failure mode (a) no longer exists: the episode ends the moment the ball
-# reaches the basin, so only (b), plus wall contact, is left for RL to fix.
+# Demo-count curve under the BINARY TERMINAL schema, seed 0, 400-episode
+# bc_eval per point (2026-09-20).  Every point is the same incremental
+# collection truncated, so the 6-demo checkpoint IS this curve's 6-demo point:
+#    2: 0.010   4: 0.037   6: 0.770   8: 0.815   10: 0.900   12: 0.882
+#
+# The curve is BIMODAL, not a gradient: it jumps from 0.037 to 0.770 between 4
+# and 6 demos, and demos are collected one per agent per round so odd counts do
+# not exist.  6 is therefore the lowest teacher that functions at all -- there
+# is no 0.25 or 0.5 teacher to be had by starving demonstrations, at any
+# granularity.
+#
+# Why the cliff, and why the sub-6 teachers are not usable: under the legacy
+# -1/step schema these same checkpoints scored -184.3 / -179.5 (2 / 4 demos),
+# which reads as ~16-20 steps per episode spent inside the basin -- impossible
+# if they reached the goal only 1-4% of the time.  Legacy scoring ignored
+# collisions and this schema does not (reward() pays _success() & ~collided),
+# so the sub-6 policies DO drive the ball to the goal and simply scrape the
+# wire on the way.  Their proposals would be executed unconditionally during
+# teacher warm-up, so a "weak" teacher chosen from below the cliff would be
+# actively harmful rather than merely unhelpful.
+#
+# The legacy-unit curve this replaces (-184.3 / -179.5 / -167.3 / -165.1 /
+# -132.2 / -133.6 at 2..12) ranked the same checkpoints differently because it
+# scored how long the ball was HELD in the basin.  Under the binary schema the
+# episode ends on arrival, so holding no longer exists and only arriving
+# cleanly counts.  Do not compare the two sets of numbers.
 r2bc_checkpoint_path: "teachers/buzz_wire/policy_checkpoint.pth"
 demonstrations_path: "teachers/buzz_wire/demonstrations_binary.pt"
 
-# 2,400 demo transitions against 600k collected frames.  Navigation collects
-# 300k against a 200k buffer, so its demos survive the first 67% of the run at a
-# 1.2% fill fraction.  400k reproduces that survival fraction exactly (the ring
-# wraps 400k frames in, i.e. iter 50/75 at 8k frames/iter) with a 0.6% demo
-# fraction at fill (0.8% when the teacher had 16 demos -- the survival fraction,
-# which is what this number sizes, is unchanged).  The ratio is
-# total_frames-based, so it is unaffected by the frames_per_batch widening.
+# 855 demo transitions (6 episodes, 4 of them reaching the goal) against 600k
+# collected frames.  Navigation collects 300k against a 200k buffer, so its
+# demos survive the first 67% of the run at a 1.2% fill fraction.  400k
+# reproduces that survival fraction exactly (the ring wraps 400k frames in,
+# i.e. iter 50/75 at 8k frames/iter).  The fill fraction is now 0.21%, half of
+# what the 12-demo teacher gave -- but the SURVIVAL fraction, which is what
+# this number sizes, is unaffected by how many demos there are.
 ibmarl_replay_size: 400000
 
 # --- Warm-up ----------------------------------------------------------------
@@ -53,14 +70,14 @@ ibmarl_replay_size: 400000
 # actor alone never reaches the goal (MADDPG 0/5): buzzwire1 ibmarl_strict seeds
 # 1 and 3 opened at 91% / 43% RL actions and sat at -200 for all 75 iterations,
 # while the three seeds that opened below 30% RL all crossed the teacher.
+#
 # 40k frames = 5 iterations = 10% of the buffer, counted against the 600k
-# budget; ~500 teacher episodes now that they end at the goal (median arrival
-# ~step 70), 200 when they ran the full horizon.  The noise-robustness figures behind this
-# (sigma 0.1: -84.3, 98.8% reaching the goal) were measured on the 16-demo
-# teacher; the 12-demo teacher reaches the goal in 88% of noiseless episodes, so
-# warm-up still supplies success signal, just less of it.  Its proposal is
-# executed with the same exploration noise it carries during arbitration.
-# Both warm-up settings are unchanged from buzzwire2, so the teacher is the only
-# thing this sweep varies.
+# budget.  UNCHANGED from the 12-demo teacher, and the weakening does not
+# threaten it: successful episodes end at the goal (median arrival step 92 for
+# this teacher, from the demo recording) and failures run the full 200, so 40k
+# frames buys roughly 350 episodes of which ~270 succeed.  The 12-demo teacher
+# gave ~470 episodes and ~410 successes -- less signal, same order, still far
+# above the handful that decided buzzwire1's bad seeds.  Revisit this if the
+# teacher is ever weakened past the point where most warm-up episodes fail.
 ibmarl_warm_up_policy: teacher
 ibmarl_min_warm_up_frames: 40000
