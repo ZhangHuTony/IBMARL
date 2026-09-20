@@ -1,0 +1,7 @@
+{
+  "timestamp": "20260821_154402",
+  "python_version": "3.10.12",
+  "command_line": "/home/tony-zhang/Research/R2BC/src/run_experiment.py transport r2bc_decent",
+  "working_directory": "/home/tony-zhang/Research/R2BC",
+  "data_path": null
+}

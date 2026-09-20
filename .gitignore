@@ -21,6 +21,9 @@ ENV/
 *.pt
 *.pth
 *.ckpt
+# Bundled teacher artifacts are the one exception (see teachers/README.md).
+!teachers/**/*.pt
+!teachers/**/*.pth
 
 # --------------------
 # Logs & outputs
