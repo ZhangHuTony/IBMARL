@@ -12,12 +12,13 @@ from tensordict import TensorDictBase, TensorDict
 from torchrl.collectors import SyncDataCollector
 from torchrl.data import LazyMemmapStorage, RandomSampler, ReplayBuffer
 
+from src.util.demonstrations import load_demonstrations_into_buffer
+from src.util.paths import resolve_path
+
 
 from src.experiments.ibmarl.modules import OverWriteActionWithBestComb, build_exploration_policy_with_noise
 
-from pathlib import Path
 import torch
-import numpy as np
 
 
 def _build_exploration_policy(parent, group, rl_policies, cfg, noise_modules_dict):
@@ -80,86 +81,6 @@ def build_data_collector(cfg, parent, rl_policies, env, device):
 
     return exploration_policies, collector, noise_modules
 
-def _load_demonstrations_into_buffer(
-    demonstration_path: Path, group: str, replay_buffer: ReplayBuffer, env
-) -> None:
-    """
-    Load demonstrations into the given replay buffer, matching the
-    [Batch, Agents, *] structure of the live collector (same as MADDPG/RLFD).
-    """
-    if not demonstration_path or not demonstration_path.exists():
-        raise FileNotFoundError(f"Demonstrations not found at {demonstration_path}")
-
-    print(f"[IBMARL] Loading demonstrations for group '{group}' from {demonstration_path}")
-    demo_data = torch.load(
-        demonstration_path, map_location="cpu", weights_only=False
-    )
-
-    obs = torch.tensor(np.array(demo_data["obs"]), dtype=torch.float32)
-    act = torch.tensor(np.array(demo_data["act"]), dtype=torch.float32)
-    rew = torch.tensor(np.array(demo_data["rewards"]), dtype=torch.float32)
-    next_obs = torch.tensor(np.array(demo_data["next_obs"]), dtype=torch.float32)
-    dones = torch.tensor(np.array(demo_data["dones"]), dtype=torch.bool)
-
-    if rew.ndim == 2:
-        rew = rew.unsqueeze(-1)
-
-    total_elements = obs.shape[0]
-    n_agents = obs.shape[1]
-
-    # Episode ends in the demos come from the recorder's time limit, not true
-    # termination, so bootstrap through them: done=True, terminated=False.
-    done_agent = dones.view(-1, 1, 1).expand(total_elements, n_agents, 1)
-    terminated_agent = torch.zeros((total_elements, n_agents, 1), dtype=torch.bool)
-
-    agents_data = TensorDict(
-        {
-            "observation": obs,
-            "action": act,
-            "episode_reward": rew,
-        },
-        batch_size=[total_elements, n_agents],
-    )
-
-    # Built fresh rather than cloned from agents_data: cloning silently carried
-    # the CURRENT observation into the next slot, making every demo transition a
-    # self-transition and poisoning the TD target.
-    next_agents_data = TensorDict(
-        {
-            "observation": next_obs,
-            "episode_reward": rew.clone(),
-            "done": done_agent.clone(),
-            "terminated": terminated_agent.clone(),
-            "reward": rew.clone(),
-        },
-        batch_size=[total_elements, n_agents],
-    )
-
-    next_td = TensorDict(
-        {
-            group: next_agents_data,
-            "done": dones.view(-1, 1).clone(),
-            "terminated": torch.zeros((total_elements, 1), dtype=torch.bool),
-        },
-        batch_size=[total_elements],
-    )
-
-    td = TensorDict(
-        {
-            group: agents_data,
-            "next": next_td,
-            "done": torch.zeros((total_elements, 1), dtype=torch.bool),
-            "terminated": torch.zeros((total_elements, 1), dtype=torch.bool),
-        },
-        batch_size=[total_elements],
-    )
-
-    replay_buffer.extend(td)
-    print(
-        f"[IBMARL] Loaded {total_elements} demonstration transitions into {group} buffer."
-    )
-
-
 def build_single_replay_buffer(
     cfg, env, device
 ) -> Dict[str, ReplayBuffer]:
@@ -168,7 +89,7 @@ def build_single_replay_buffer(
     Online transitions are added during training; old data (including demos)
     is naturally overwritten once the buffer fills.
     """
-    demonstration_path = Path(cfg["demonstrations_path"])
+    demonstration_path = resolve_path(cfg["demonstrations_path"])
     buffer_size = cfg.get("ibmarl_replay_size", cfg["memory_size"])
     train_batch_size = cfg["training"]["train_batch_size"]
 
@@ -184,7 +105,7 @@ def build_single_replay_buffer(
             rb.append_transform(lambda td: td.to(device))
         replay_buffers[group] = rb
 
-        _load_demonstrations_into_buffer(demonstration_path, group, rb, env)
+        load_demonstrations_into_buffer(demonstration_path, group, rb, log_prefix="[IBMARL]")
 
     return replay_buffers
 
@@ -212,7 +133,7 @@ def build_demo_and_online_buffers(
     Build demo (pre-loaded) and online (empty) replay buffers per group.
     Same storage/sampler/batch_size as MADDPG/RLFD.
     """
-    demonstration_path = Path(cfg["demonstrations_path"])
+    demonstration_path = resolve_path(cfg["demonstrations_path"])
     memory_size = cfg["memory_size"]
     train_batch_size = cfg["training"]["train_batch_size"]
 
@@ -230,9 +151,7 @@ def build_demo_and_online_buffers(
                 rb.append_transform(lambda td: td.to(device))
             buffers[group] = rb
 
-        _load_demonstrations_into_buffer(
-            demonstration_path, group, demo_buffers[group], env
-        )
+        load_demonstrations_into_buffer(demonstration_path, group, demo_buffers[group], log_prefix="[IBMARL]")
 
     return demo_buffers, online_buffers
 
