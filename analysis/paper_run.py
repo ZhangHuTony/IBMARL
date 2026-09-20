@@ -41,9 +41,9 @@ VARIANTS: dict[str, tuple[str, dict]] = {
     "ibmarl_strict_hard": ("ibmarl", {"strict": True, "soft": False}),
     "ibmarl_strict_1critic": ("ibmarl", {"strict": True, "num_critics": 1}),
     # --- reference ---
-    # bc_eval.yaml still points at a collaborator's home dir; reuse the same
-    # R2BC checkpoint the demo-based methods are given.
-    "bc_eval": ("bc_eval", {"__use_ibmarl_bc_checkpoint__": True}),
+    # bc_eval*.yaml carry the same bundled teacher (teachers/<task>/) the
+    # demo-based methods bootstrap from, so the reference line needs no override.
+    "bc_eval": ("bc_eval", {}),
 }
 
 
@@ -57,7 +57,10 @@ def _gated(alpha: float, mode: str = "gated") -> tuple[str, dict]:
     separately below under an ``ibmarl_strict_uniform_a*`` name.
     """
     return ("ibmarl", {"strict": True, "actor_reg": {
-        "mode": mode, "alpha": alpha, "gate": "soft", "temperature": 0.05}})
+        # Gate temperature = the arbiter's, rescaled for the binary terminal
+        # schema (see ibmarl.yaml).  These variants are the buzz_wire actor-lag
+        # experiment; a legacy-schema task would need 0.05 here.
+        "mode": mode, "alpha": alpha, "gate": "soft", "temperature": 0.0005}})
 
 
 # --- actor-lag experiment (results/buzzwire3_reg; not in paper_sweep.JOBS) ---
@@ -70,26 +73,6 @@ VARIANTS.update({f"ibmarl_strict_gated_a{a:g}": _gated(a) for a in (0.1, 0.4, 1.
 # ungated and annealed on a clock rather than by the critic).
 VARIANTS.update({f"ibmarl_strict_uniform_a{a:g}": _gated(a, mode="uniform")
                  for a in (0.4,)})
-
-
-def _ibmarl_bc_checkpoint(scenario: str) -> str:
-    """
-    The teacher checkpoint the demo-based methods are given for *scenario*.
-
-    Prefers the per-scenario overlay (config/experiments/ibmarl_<scenario>.yaml) and falls
-    back to the base ibmarl.yaml, mirroring load_config's merge order.  Without the overlay
-    lookup this silently handed every scenario the navigation teacher.
-    """
-    exp_dir = Path("config") / "experiments"
-    for name in (f"ibmarl_{scenario}.yaml", "ibmarl.yaml"):
-        path = exp_dir / name
-        if not path.exists():
-            continue
-        with open(path) as f:
-            cfg = yaml.safe_load(f) or {}
-        if "r2bc_checkpoint_path" in cfg:
-            return cfg["r2bc_checkpoint_path"]
-    raise KeyError(f"No r2bc_checkpoint_path found for scenario {scenario!r}")
 
 
 def build_cfg(
@@ -108,9 +91,6 @@ def build_cfg(
     exp_type, overrides = VARIANTS[variant]
 
     cfg = load_config(scenario, exp_type)
-    overrides = dict(overrides)
-    if overrides.pop("__use_ibmarl_bc_checkpoint__", False):
-        cfg["r2bc_checkpoint_path"] = _ibmarl_bc_checkpoint(scenario)
     cfg.update(overrides)
     cfg["seed"] = seed
     cfg["render"] = False
