@@ -13,6 +13,13 @@ So re-running this script after any interruption picks up where it left off.
     python -m analysis.paper_sweep --jobs 3            # launch / resume
     python -m analysis.paper_sweep --status            # progress only
     python -m analysis.paper_sweep --dry-run
+
+Smoke-testing a plan before committing GPU-days to it: use a throwaway --tag
+(so nothing real is resumed into), --max-seeds 1, and enough --n-iters to get
+PAST the warm-up, or the IBMARL variants never take a gradient step and the
+training path goes untested.  On buzz_wire warm-up ends once the buffer
+reaches ibmarl_min_warm_up_frames (40k) -- iteration 5 at 8k frames/iteration
+with the demos pre-loaded -- so --n-iters 7 is the first value that trains.
 """
 
 from __future__ import annotations
@@ -149,6 +156,14 @@ def main() -> int:
         default=None,
         help="Override n_iters. Default: leave it to config/base.yaml.",
     )
+    parser.add_argument(
+        "--n-opt-steps",
+        type=int,
+        default=None,
+        help="Override training.n_optimiser_steps (smoke tests).  Needed to "
+             "smoke-test buzz_wire, whose 2000 steps/iteration dominate the "
+             "wall time long before the code under test has been reached.",
+    )
     parser.add_argument("--resume-interval", type=int, default=25)
     parser.add_argument("--only", default=None, help="comma-separated variants")
     parser.add_argument("--max-seeds", type=int, default=None,
@@ -227,6 +242,8 @@ def main() -> int:
             ]
             if args.n_iters is not None:
                 cmd += ["--n-iters", str(args.n_iters)]
+            if args.n_opt_steps is not None:
+                cmd += ["--n-opt-steps", str(args.n_opt_steps)]
             fh = open(log_path, "a")
             fh.write(f"\n===== launch {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
             fh.flush()
