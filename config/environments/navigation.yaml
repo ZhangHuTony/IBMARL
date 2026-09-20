@@ -5,5 +5,15 @@ extends: "../base.yaml"
 
 # Environment specific parameters
 n_agents: 3
-gt_radius: 0.4
+gt_radius: 0.4  # basin of the legacy -1/step transform; unused under binary_terminal_reward
 horizon: 100
+
+# Binary terminal reward (src/environment/scenarios/navigation_terminal.py):
+# each agent is paid +1 once, on the first step it is within its goal radius
+# (0.05, VMAS's own on_goal predicate), 0 on every other step; the episode
+# terminates once every agent has been paid, else truncates at `horizon` with
+# the critic bootstrapping through the time limit.  Lives here rather than in an
+# experiment yaml because it is the task definition: every learner on this task
+# sees the same MDP.  The bundled demos were recorded under the legacy schema
+# and relabelled offline (analysis/relabel_demos_binary.py).
+binary_terminal_reward: True

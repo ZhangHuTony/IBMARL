@@ -1,7 +1,8 @@
 from torchrl.envs import VmasEnv, TransformedEnv, check_env_specs
-from torchrl.envs.transforms import RewardSum
+from torchrl.envs.transforms import RewardSum, StepCounter
 from src.environment.transforms.registry import build_transforms
 from src.environment.scenarios.buzz_wire_sparse import SparseRewardBuzzWireScenario
+from src.environment.scenarios.navigation_terminal import TerminalSuccessNavigationScenario
 
 def make_env(config: dict, device) -> TransformedEnv:
     """
@@ -11,12 +12,20 @@ def make_env(config: dict, device) -> TransformedEnv:
     num_vmas_env = config.get("frames_per_batch", 1000) // horizon
     # num_vmas_env = 20
     seed = config.get("seed", 42)
+    binary = binary_terminal(config)
 
-    # Create the base Vmas environment
+    # Create the base Vmas environment.
+    # Under the binary terminal schema the time limit is NOT given to VMAS:
+    # vmas merges its own truncation into scenario.done(), and torchrl's VmasEnv
+    # copies that merged flag into "terminated" (it never writes "truncated"),
+    # so every horizon hit would look like a true absorbing terminal and the
+    # critic would learn V = 0 one step short of the goal.  The StepCounter
+    # below produces the time limit instead, as "truncated", leaving
+    # "terminated" to the scenario's real terminal.
     base_env = VmasEnv(
         scenario=resolve_scenario(config),
         num_envs=num_vmas_env,
-        max_steps=horizon,
+        max_steps=None if binary else horizon,
         device=device,
         seed=seed,
         continuous_actions=True,
@@ -25,6 +34,11 @@ def make_env(config: dict, device) -> TransformedEnv:
 
     # Wrap with TransformedEnv
     env = TransformedEnv(base_env)
+
+    if binary:
+        # Root-level done keys only (VmasEnv exposes none per group), so the
+        # default keys are right; order relative to RewardSum is immaterial.
+        env.append_transform(StepCounter(max_steps=horizon))
 
     # 1. Add Custom Transforms (e.g., Sparse Rewards)
     # Adding these before RewardSum ensures the sums reflect the modified rewards.
@@ -44,22 +58,50 @@ def make_env(config: dict, device) -> TransformedEnv:
     check_env_specs(env)
     return env
 
+def binary_terminal(config: dict) -> bool:
+    """
+    Whether this env uses the binary terminal reward schema: +1 once, on the
+    step the task's success predicate first holds, termination there, and a
+    bootstrapped time limit otherwise.  Set per task in
+    config/environments/<task>.yaml; it is part of the task definition, so
+    every learner on that task sees the same MDP.  Only meaningful on top of
+    sparse rewards -- ``--dense`` switches it off along with them.
+    """
+    return bool(config.get("sparse_rewards", False)) and bool(
+        config.get("binary_terminal_reward", False)
+    )
+
+
 def resolve_scenario(config: dict):
     """
-    Return what VmasEnv should build: usually the scenario name string, but for
-    sparse buzz_wire a scenario INSTANCE (torchrl forwards it to vmas.make_env
-    untouched). The sparse reward there needs the ball's position, which is not
-    in the observation, so it cannot be a TorchRL transform like the other
-    scenarios' sparse rewards (see src/environment/scenarios/buzz_wire_sparse.py).
+    Return what VmasEnv should build: usually the scenario name string, but a
+    scenario INSTANCE (torchrl forwards it to vmas.make_env untouched) where
+    the reward has to live at scenario level:
+
+    * sparse buzz_wire, always -- its predicate needs the ball's position,
+      which is not in the observation, so it cannot be a TorchRL transform
+      like the other scenarios' sparse rewards
+      (see src/environment/scenarios/buzz_wire_sparse.py);
+    * navigation under the binary terminal schema -- a transform runs after
+      the simulator has decided done(), so it cannot end the episode where the
+      reward is paid (see src/environment/scenarios/navigation_terminal.py).
+
     A fresh instance per call is essential: the train, eval, and render envs
     each need their own simulator state.
     """
     scenario = config.get("scenario_name")
-    if scenario == "buzz_wire" and config.get("sparse_rewards", False):
-        print("Using SparseRewardBuzzWireScenario (scenario-level sparse reward + done suppression)")
+    sparse = config.get("sparse_rewards", False)
+    binary = binary_terminal(config)
+    if scenario == "buzz_wire" and sparse:
+        mode = "binary terminal reward" if binary else "legacy -1/step reward + done suppression"
+        print(f"Using SparseRewardBuzzWireScenario ({mode})")
         return SparseRewardBuzzWireScenario(
-            success_threshold=config.get("gt_radius", 0.1)
+            success_threshold=config.get("gt_radius", 0.1),
+            binary_terminal=binary,
         )
+    if scenario == "navigation" and binary:
+        print("Using TerminalSuccessNavigationScenario (per-agent binary terminal reward)")
+        return TerminalSuccessNavigationScenario()
     return scenario
 
 

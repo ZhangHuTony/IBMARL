@@ -21,6 +21,7 @@ from src.experiments.ibmarl.networks import R2bcPolicy, build_rl_policies, build
 from src.experiments.ibmarl.losses import GroupTrainer
 from src.experiments.ibmarl.arbiter import ActionArbiter
 from src.experiments.ibmarl.modules import build_eval_policies, build_il_noise_modules
+from src.util.paths import resolve_path
 from src.experiments.ibmarl.data import (
     build_data_collector,
     build_single_replay_buffer,
@@ -32,7 +33,7 @@ class IbmarlExperiment(BaseMARLExperiment):
     def __init__(self, config):
         super().__init__(config)
 
-        bc_path = Path(config["r2bc_checkpoint_path"])
+        bc_path = resolve_path(config["r2bc_checkpoint_path"])
         self.il_policies = R2bcPolicy(bc_path, self.env, self.device)
 
         self.rl_policies = build_rl_policies(config, self.env, self.device)

@@ -5,7 +5,6 @@ and prints the mean episode reward.
 """
 
 import torch
-from pathlib import Path
 
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule, TensorDictSequential
@@ -13,6 +12,7 @@ from torchrl.envs import ExplorationType, set_exploration_type
 
 from src.experiments.base_marl_experiment import BaseMARLExperiment
 from src.experiments.ibmarl.networks import R2bcPolicy
+from src.util.paths import resolve_path
 
 
 class BcEvalExperiment(BaseMARLExperiment):
@@ -20,7 +20,7 @@ class BcEvalExperiment(BaseMARLExperiment):
     def __init__(self, config):
         super().__init__(config)
 
-        bc_path = Path(config["r2bc_checkpoint_path"])
+        bc_path = resolve_path(config["r2bc_checkpoint_path"])
         self.bc_policy = R2bcPolicy(bc_path, self.env, self.device)
 
         self._bc_td_policy = self._wrap_bc_as_tensordict_policy()
@@ -73,9 +73,9 @@ class BcEvalExperiment(BaseMARLExperiment):
                         break_when_any_done=False,
                     )
                     for group in self.env.group_map:
-                        ep_reward = out.get(("next", group, "episode_reward"))
-                        done = self._agent_done_mask(out, group, ep_reward)
-                        collected[group].append(ep_reward[done].float())
+                        collected[group].append(
+                            self._completed_episode_returns(out, group)
+                        )
 
         lines = []
         for group in self.env.group_map:

@@ -156,6 +156,33 @@ class BaseMARLExperiment(ResumeMixin):
             done = done.unsqueeze(-2).expand(*done.shape[:-1], n_agents, 1)
         return done
 
+    def _completed_episode_returns(self, out, group: str) -> torch.Tensor:
+        """
+        Per-agent returns of the episodes that finished inside one
+        ``env.rollout`` output, flattened to 1-D.
+
+        Under ``binary_terminal_reward`` episodes end early on success, so a
+        sub-env that succeeds quickly auto-resets and can complete two or three
+        episodes in one rollout, over-weighting the fast ones if every ended
+        episode were counted.  Only the FIRST completed episode per sub-env is
+        taken: ``rollout`` resets first and the StepCounter truncates at exactly
+        ``horizon``, so every sub-env completes exactly one episode within a
+        horizon-length rollout, which keeps the caller's "one episode per
+        sub-env per rollout" arithmetic exact.
+
+        Gated on the flag because it is not a no-op elsewhere: balance already
+        terminates early (measured 1.06 dones per sub-env per rollout) and its
+        numbers must not move.
+        """
+        ep_reward = out.get(("next", group, "episode_reward"))  # [n_envs, T, n_agents, 1]
+        if self.config.get("binary_terminal_reward", False):
+            done_t = out.get(("next", "done")).squeeze(-1)  # [n_envs, T]
+            first_t = done_t.int().argmax(dim=1)
+            envs = torch.nonzero(done_t.any(dim=1), as_tuple=True)[0]
+            return ep_reward[envs, first_t[envs]].reshape(-1).float()
+        done = self._agent_done_mask(out, group, ep_reward)
+        return ep_reward[done].float()
+
     def should_evaluate(self, iteration: int) -> bool:
         """
         Whether the (0-based) *iteration* about to be logged should run a
@@ -260,22 +287,23 @@ class BaseMARLExperiment(ResumeMixin):
         with torch.no_grad():
             with set_exploration_type(ExplorationType.MODE):
                 for _ in range(n_rollouts):
-                    # break_when_any_done=False is required for correctness, not
-                    # just completeness.  The default stops the rollout at the
-                    # FIRST sub-env to finish, and only episodes that have ended
-                    # are counted below -- so a policy that solves the task has
-                    # its slower episodes systematically discarded and scores
-                    # too well.  Measured on ibmarl/seed_0: -19.42 from 87 of
-                    # 630 agent-episodes, versus -21.46 from all 630.  It also
-                    # restores the n_rollouts arithmetic, which assumes each
-                    # rollout yields one episode per sub-env.
+                    # break_when_any_done=False so every sub-env gets its full
+                    # horizon.  The default stops the rollout at the FIRST
+                    # sub-env to finish, and only episodes that have ended are
+                    # counted -- so a policy that solves the task has its
+                    # slower episodes systematically discarded and scores too
+                    # well.  Measured on ibmarl/seed_0: -19.42 from 87 of 630
+                    # agent-episodes, versus -21.46 from all 630.  Which of the
+                    # ended episodes count is _completed_episode_returns'
+                    # business; it is what keeps the n_rollouts arithmetic
+                    # (one episode per sub-env per rollout) exact.
                     out = env.rollout(
                         horizon, policy=eval_policy, break_when_any_done=False
                     )
                     for group in env.group_map.keys():
-                        ep_reward = out.get(("next", group, "episode_reward"))
-                        done = self._agent_done_mask(out, group, ep_reward)
-                        returns[group].append(ep_reward[done].float())
+                        returns[group].append(
+                            self._completed_episode_returns(out, group)
+                        )
                         for key in extra_keys:
                             # Averaged over every executed step, not only the
                             # ones ending an episode: with

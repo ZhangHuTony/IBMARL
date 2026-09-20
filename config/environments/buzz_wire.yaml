@@ -1,4 +1,4 @@
-# Buzz-wire environment configuration (sparse fixed-horizon variant via
+# Buzz-wire environment configuration (sparse binary-terminal variant via
 # SparseRewardBuzzWireScenario - see src/environment/scenarios/buzz_wire_sparse.py)
 
 #Inherit from the base configuration
@@ -35,3 +35,14 @@ gt_radius: 0.1
 # have cut the number of updates and the pilot only took off after ~50k of them.
 training:
   n_optimiser_steps: 2000
+
+# Binary terminal reward (src/environment/scenarios/buzz_wire_sparse.py):
+# +1 to both agents once, on the first step the ball is within gt_radius of the
+# goal, and the episode terminates there; 0 on every other step, truncating at
+# `horizon` (StepCounter) with the critic bootstrapping through the time limit.
+# Wire/floor contact terminates with 0 -- the buzz-wire rule; without it a
+# constant push drifts the ball along the walls into the basin (~40% of
+# episodes) and an untrained actor scores ~0.95.  Lives here because it is the
+# task definition.  The bundled demos were recorded under the legacy -1/step schema
+# and relabelled offline (analysis/relabel_demos_binary.py).
+binary_terminal_reward: True

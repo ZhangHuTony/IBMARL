@@ -1,0 +1,9 @@
+# Transport-specific overlay for RLfD -- the same demos IBMARL bootstraps from.
+# Without this, rlfd.yaml's navigation demos (18-dim obs) would be loaded into an
+# 11-dim transport buffer, mirroring the hazard rlfd_balance.yaml guards against.
+#
+# 204 episodes / 122,400 transitions, 3 agents, obs 11, act 2, dense rewards.
+# Stays absolute: transport's demonstrations.pt is 91 MB, too large to bundle
+# under teachers/ (see teachers/README.md), so it is the one machine-local
+# artifact.  The teacher checkpoint itself is bundled.
+demonstrations_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/transport_r2bc_decent_20260821_154402/demonstrations.pt"

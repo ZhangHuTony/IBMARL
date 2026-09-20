@@ -1,6 +1,6 @@
 # Buzz-wire-specific overlay for RFT -- the same demos IBMARL bootstraps from,
 # used only for the BC regularizer.
-demonstrations_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/buzzwire_r2bc_decent_20260826_225653/demonstrations.pt"
+demonstrations_path: "teachers/buzz_wire/demonstrations_binary.pt"
 
 # bc_anneal_n_iters is ITERATION-indexed, and buzz_wire runs 75 iterations, not
 # navigation's 300. Inheriting rft.yaml's 150 would freeze the BC regularizer at

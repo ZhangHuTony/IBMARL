@@ -1,4 +1,4 @@
 # Buzz-wire-specific overlay for RLfD -- the same demos IBMARL bootstraps from.
-# Without this, rlfd.yaml's navigation demos (18-dim obs, stale pre-move path)
+# Without this, rlfd.yaml's navigation demos (18-dim obs)
 # would be loaded into a 6-dim buzz_wire buffer.
-demonstrations_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/buzzwire_r2bc_decent_20260826_225653/demonstrations.pt"
+demonstrations_path: "teachers/buzz_wire/demonstrations_binary.pt"

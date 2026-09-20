@@ -26,8 +26,15 @@
 # episodes that never arrive at all (16-demo teacher: 4%).  Warm-up therefore
 # still sees ~88% successful teacher episodes, and both failure modes are ones
 # the RL side can plausibly fix.
-r2bc_checkpoint_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/buzzwire_r2bc_decent_20260826_225653/policy_checkpoint.pth"
-demonstrations_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/buzzwire_r2bc_decent_20260826_225653/demonstrations.pt"
+#
+# The numbers above are in the legacy -1/step units.  Under binary_terminal_reward
+# (config/environments/buzz_wire.yaml) the teacher level is a success rate --
+# 9/12 = 0.75 on the relabelled demos, 0.875 by bc_eval (2026-09-19; wall
+# contact now ends the episode, which costs the teacher ~1 success in 12).
+# Failure mode (a) no longer exists: the episode ends the moment the ball
+# reaches the basin, so only (b), plus wall contact, is left for RL to fix.
+r2bc_checkpoint_path: "teachers/buzz_wire/policy_checkpoint.pth"
+demonstrations_path: "teachers/buzz_wire/demonstrations_binary.pt"
 
 # 2,400 demo transitions against 600k collected frames.  Navigation collects
 # 300k against a 200k buffer, so its demos survive the first 67% of the run at a
@@ -46,8 +53,9 @@ ibmarl_replay_size: 400000
 # actor alone never reaches the goal (MADDPG 0/5): buzzwire1 ibmarl_strict seeds
 # 1 and 3 opened at 91% / 43% RL actions and sat at -200 for all 75 iterations,
 # while the three seeds that opened below 30% RL all crossed the teacher.
-# 40k frames = 5 iterations = 200 teacher episodes = 10% of the buffer, counted
-# against the 600k budget.  The noise-robustness figures behind this
+# 40k frames = 5 iterations = 10% of the buffer, counted against the 600k
+# budget; ~500 teacher episodes now that they end at the goal (median arrival
+# ~step 70), 200 when they ran the full horizon.  The noise-robustness figures behind this
 # (sigma 0.1: -84.3, 98.8% reaching the goal) were measured on the 16-demo
 # teacher; the 12-demo teacher reaches the goal in 88% of noiseless episodes, so
 # warm-up still supplies success signal, just less of it.  Its proposal is

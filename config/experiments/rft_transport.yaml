@@ -1,0 +1,28 @@
+# Transport-specific overlay for RFT -- the same demos IBMARL and RLfD are given.
+#
+# Without this file RFT is not merely mis-tuned on transport, it cannot run:
+# rft.yaml's navigation demos are [N, 3, 18] and the transport actor takes an
+# 11-dim observation, so _compute_bc_loss_for_group raises on the first BC
+# update.  That is why results/transport15m has maddpg and rlfd but no rft.
+# rlfd_transport.yaml guards against exactly this; this is its twin.
+#
+# 204 episodes / 122,400 transitions, 3 agents, obs 11, act 2, dense rewards.
+# Stays absolute: transport's demonstrations.pt is 91 MB, too large to bundle
+# under teachers/ (see teachers/README.md), so it is the one machine-local
+# artifact.  The teacher checkpoint itself is bundled.
+demonstrations_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/transport_r2bc_decent_20260821_154402/demonstrations.pt"
+
+# load_config merges this layer with a flat `config.update`, so naming `rft`
+# here REPLACES rft.yaml's whole block -- bc_alpha has to be restated or it
+# silently falls back to the 0.1 default in rft_experiment.py.  It is restated
+# at the same value: alpha is not what this overlay is correcting.
+rft:
+  bc_alpha: 0.1
+
+  # rft.yaml's 150 is a navigation constant: 150 of navigation's 300 iterations
+  # is half the run.  Transport runs 1500 iterations, where 150 would switch the
+  # BC term off after 10% of training (5% at 3000) and leave RFT a strawman --
+  # its entire mechanism spent before the comparison begins.  750 restores the
+  # navigation ratio.  This number is tied to n_iters: if the transport budget
+  # changes, halve the new one.
+  bc_anneal_n_iters: 750

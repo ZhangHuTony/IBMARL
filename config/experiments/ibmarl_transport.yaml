@@ -1,11 +1,14 @@
 # Transport-specific overlay for IBMARL.
 # Merged on top of config/experiments/ibmarl.yaml by load_config, so everything not
-# named here (strict/soft/temperature/num_critics/exploration_noise) keeps its default.
+# named here (strict/soft/num_critics/exploration_noise) keeps its default.
 
 # Suboptimal heuristic teacher: 204 episodes, 122,400 transitions, dense rewards,
 # delivers the package in 9.8% of episodes.
-r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/transport_r2bc_decent_20260821_154402/policy_checkpoint.pth"
-demonstrations_path: "/home/tony-zhang/Research/R2BC/results/transport_r2bc_decent_20260821_154402/demonstrations.pt"
+r2bc_checkpoint_path: "teachers/transport/policy_checkpoint.pth"
+# Stays absolute: transport's demonstrations.pt is 91 MB, too large to bundle
+# under teachers/ (see teachers/README.md), so it is the one machine-local
+# artifact.  The teacher checkpoint itself is bundled.
+demonstrations_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/transport_r2bc_decent_20260821_154402/demonstrations.pt"
 
 # 122,400 demo transitions.  Navigation collects 300k frames against a 200k buffer, so its
 # demos survive to ~iter 200/300.  Transport collects 1.5M: at 200k the ring buffer wraps back
@@ -22,3 +25,10 @@ ibmarl_replay_size: 1000000
 #  * 'dones' is the package-on-goal flag, not a terminal flag (True mid-episode, never at the
 #    horizon-600 boundaries).  It cannot reach the TD target: losses.py reads
 #    ("next", group, "terminated"), which the loader sets to all-zeros.
+
+# This task still runs the legacy -1/step sparse schema (no binary_terminal_reward
+# in its environment yaml), so the arbiter temperature stays at the value the
+# legacy Q-scale was tuned for; ibmarl.yaml's default is rescaled for the binary
+# tasks.  actor_reg keeps ibmarl.yaml's block (mode: none), so its gate
+# temperature is moot here; a gated variant on this task would need it re-pinned.
+temperature: 0.05

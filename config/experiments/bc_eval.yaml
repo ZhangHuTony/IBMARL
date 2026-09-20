@@ -1,7 +1,8 @@
 extends: "../base.yaml"
 
-# Navigation teacher, same checkpoint ibmarl.yaml bootstraps from.  In practice
-# analysis/paper_run.py overrides this (VARIANTS["bc_eval"] carries
-# __use_ibmarl_bc_checkpoint__), but a dead /home/connor path left here is a
-# trap for any other caller.  Per-scenario overlays supersede it.
-r2bc_checkpoint_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/navigation_r2bc_decent_20260129_201300/policy_checkpoint.pth"
+# Navigation teacher: the bundled checkpoint ibmarl.yaml bootstraps from
+# (teachers/navigation/, see teachers/README.md).  Per-scenario overlays
+# (bc_eval_<scenario>.yaml) supersede it.  analysis/paper_run.py applies no
+# override any more, so these yamls are the single source of truth for the
+# teacher reference line.
+r2bc_checkpoint_path: "teachers/navigation/policy_checkpoint.pth"

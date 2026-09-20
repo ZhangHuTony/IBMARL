@@ -1,4 +1,4 @@
 # Buzz-wire-specific overlay for bc_eval -- the teacher reference line.
-# Supersedes the stale /home/connor/... path in config/experiments/bc_eval.yaml.
+# Supersedes the navigation teacher in config/experiments/bc_eval.yaml.
 # Same checkpoint IBMARL bootstraps from (see ibmarl_buzz_wire.yaml).
-r2bc_checkpoint_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/buzzwire_r2bc_decent_20260826_225653/policy_checkpoint.pth"
+r2bc_checkpoint_path: "teachers/buzz_wire/policy_checkpoint.pth"
