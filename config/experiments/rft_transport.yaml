@@ -19,10 +19,14 @@ demonstrations_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/transport_r2
 rft:
   bc_alpha: 0.1
 
-  # rft.yaml's 150 is a navigation constant: 150 of navigation's 300 iterations
-  # is half the run.  Transport runs 1500 iterations, where 150 would switch the
-  # BC term off after 10% of training (5% at 3000) and leave RFT a strawman --
-  # its entire mechanism spent before the comparison begins.  750 restores the
-  # navigation ratio.  This number is tied to n_iters: if the transport budget
-  # changes, halve the new one.
-  bc_anneal_n_iters: 750
+  # HALF the run, matching navigation's ratio (rft.yaml's 150 of 300).  Getting
+  # this wrong breaks RFT in either direction and both mistakes have been made
+  # here: 150 against transport's budget switched the BC term off after 10% of
+  # training, leaving RFT a strawman; 750 against an 800-iteration budget is the
+  # mirror image -- the term would anneal over 94% of the run and never really
+  # turn off, which is a different method.
+  #
+  # ****  TIED TO n_iters.  ALWAYS HALF OF IT.  ****
+  # 800-iteration budget (results/transport800) -> 400.
+  # If the budget moves, move this with it.
+  bc_anneal_n_iters: 400
