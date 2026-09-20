@@ -1,0 +1,420 @@
+% =========================================================================
+% IBMARL workshop paper -- complete LaTeX source (IEEEtran conference).
+% Updated 2026-08-27 with the finished buzzwire3 sweep and the final figures.
+%
+% To build: paste this file into main.tex on Overleaf and upload, next to it,
+% the two figure files from IBMARL/paper/:
+%   fig_tasks.pdf     Fig. 1 -- (a) Navigation panel (fig_env_navigation.png,
+%                     adapted from R2BC), (b) VMAS render of sparse Buzzwire.
+%   fig_results.pdf   Fig. 2 -- 2x2 learning curves: columns Navigation |
+%                     Buzzwire, top row baselines, bottom row arbiter variants,
+%                     one legend row under each panel row.
+% Regenerate both with:  python -m analysis.paper_figures_two_task
+% (Buzzwire panel is rendered live from VMAS and needs a display; the script
+% falls back to a frame of the R2BC demo GIF otherwise.)
+%
+% Data behind the numbers:
+%   Buzzwire    results/buzzwire3   (3-evaluation window; IBMARL variants are
+%               the executed RL+IL policy, baselines their own actors):
+%       python -m analysis.steps_to_teacher --tag buzzwire3 --protocol executed
+%   Navigation  PLACEHOLDERS from results/paper3 (pre-fix sweep, 9-evaluation
+%               window) until the re-run results/paper4 (started 2026-08-27
+%               17:18) finishes; the text assumes it yields similar results.
+%   IL-policy levels: bc_eval in each sweep (-48.7 Navigation, -137.5 Buzzwire).
+%
+% The paper describes ONE algorithm for both tasks: IL-policy warm-up (the IL
+% policy acts unconditionally until the buffer holds W online steps), soft
+% arbitration, 3-critic ensemble, executed-policy evaluation.  NOTE: paper4's
+% saved config has ibmarl_warm_up_policy: arbiter (W = 5000), i.e. the
+% Navigation re-run is NOT using the IL warm-up the text describes; restart
+% it with ibmarl_warm_up_policy: teacher or amend Sec. III-C.
+%
+% Length: 4 pages including references in the Overleaf (pdfTeX) build,
+% which packs about half a column more than the tectonic build used for
+% local checks (that one shows ~25 reference lines on a 5th page).  If the
+% Overleaf build spills, remove in this order: the per-seed crossing ranges
+% and MADDPG bimodality in Sec. IV-A, the 88% clause in "IL policies and
+% demonstrations", the soft-arbitration rationale in Sec. III-A.
+% Delete the \todo macro and this header before submission.
+% =========================================================================
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{dsfont}
+\usepackage[font=footnotesize,labelsep=period]{caption}
+
+% ---- Draft helpers (delete before submission) ----------------------
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+
+% ---- Notation shortcuts --------------------------------------------
+\newcommand{\il}{\text{IL}}
+\newcommand{\rl}{\text{RL}}
+\newcommand{\obs}{\mathbf{o}}
+\newcommand{\act}{\mathbf{a}}
+
+\begin{document}
+
+\title{Imitation Bootstrapped Multi-Agent Reinforcement Learning}
+%Submission explicitly asks for author's names so I doubt that it is double blind.
+\author{\IEEEauthorblockN{Tony Zhang\textsuperscript{1}, Connor Mattson\textsuperscript{1}, Daniel S. Brown\textsuperscript{1}}
+\IEEEauthorblockA{\textsuperscript{1}Kahlert School of Computing, University of Utah, Salt Lake City, UT, USA\\
+\texttt{u1183156@utah.edu, c.mattson@utah.edu, daniel.s.brown@utah.edu}}}
+
+
+\maketitle
+
+\begin{abstract}
+Demonstrations are an effective way to accelerate single-agent reinforcement learning (RL), however, extending this idea to multi-agent reinforcement learning (MARL) is non-trivial: a lone human cannot realistically provide demonstrations for multiple agents simultaneously. Recent work on Round-Robin Behavior Cloning (R2BC) provides a solution by allowing a demonstrator to control a single agent at a time while the others execute their own current policies. In this work, we propose \textit{Imitation Bootstrapped Multi-Agent Reinforcement Learning (IBMARL)}, a framework which extends IBRL to cooperative teams: at each time step the imitation and RL policies each propose a joint action, and an ensemble of centralized critics scores the two and
+samples between them. We evaluate IBMARL on two sparse-reward simulation tasks where it significantly outperforms baselines methods in sample efficiency.
+\end{abstract}
+
+\begin{IEEEkeywords}
+multi-agent reinforcement learning, imitation learning, learning from demonstration, multi-robot systems
+\end{IEEEkeywords}
+
+\section{Introduction}
+Cooperative multi-robot tasks are difficult for RL to solve: the joint-action space grows exponentially with the number of agents, credit assignment across agents is ambiguous, and rewards are often inherently sparse \cite{albrecht2024marl}. In single-agent RL, demonstrations reliably overcome similar obstacles---methods such as DQfD \cite{hester2018dqfd}, DDPGfD \cite{vecerik2017ddpgfd}, and DDPG + BC \cite{nair2018overcoming} seed the replay buffer or regularize the learner toward expert data, and Imitation Bootstrapped RL (IBRL) \cite{hu2023ibrl} goes further by keeping a behavior-cloned policy in the loop, using it to propose actions during exploration and to improve the bootstrap target. \\
+The obstacle to extending such frameworks to MARL is practicality rather than algorithm design: nearly all multi-agent imitation learning (MAIL) assumes joint demonstrations, in which an expert must simultaneously command all $N$ agents---data a lone human operator cannot realistically provide for a physically coupled team \cite{mattson2026r2bc, turco2024cognitive}. Round-Robin Behavior Cloning (R2BC) \cite{mattson2026r2bc} resolves this by having the demonstrator cycle through each team member one at a time while the others execute their current learned policies, yielding decentralized cooperative policies from realistic single-agent demonstrations. However, R2BC inherits the classic limitations of behavior cloning: covariate shift, a performance ceiling at the demonstrator, and a prohibitive demonstration burden for the last increments of task performance. \\
+\indent This work combines MARL and MAIL. Assuming access to a sparse ground-truth team reward, we ask: \emph{Can policies trained from realistic single-agent demonstrations bootstrap MARL?} Our contributions are:
+%I think it makes sense that IL bootstraps RL not the other way around. As IL helps start RL not the other way around.
+\begin{itemize}
+    \item We formulate \textbf{IBMARL}, a generalization of IBRL to cooperative Dec-POMDPs in which the imitation learned (IL) policy is a set of $N$ decentralized R2BC policies rather than a single centralized policy.
+    \item On 2 difficult sparse-reward tasks in VMAS \cite{bettini2022vmas}, IBMARL significantly outperforms baselines in terms of sample efficiency. Specifically, on the physically coupled Buzzwire task, IBMARL surpasses its R2BC initialization $1.8\times$ faster than both a MARL-from-demonstrations baseline and an RL fine-tuning baseline.
+\end{itemize}
+
+\textbf{Related work.} In single-agent RL, demonstrations pretrain the policy \cite{rajeswaran2018dapg}, prefill the replay buffer \cite{vecerik2017ddpgfd, hester2018dqfd}, or regularize the objective \cite{nair2018overcoming}, and IBRL takes the higher-valued of the IL and RL actions at both action-selection and bootstrapping time \cite{hu2023ibrl}. MARL extensions remain limited \cite{albrecht2024marl}: prior work lets an expert control a single agent during environment interaction \cite{alagha2023democloning} or distills coordination from a centralized IL policy into decentralized learners \cite{sartoretti2019primal}. Closest to our setting is PegMARL \cite{yu2025pegmarl}, which combines single-agent demonstrations with sparse-reward MARL via discriminator-based reward shaping; its demonstrations are, however, provided with no other agents present, leaving all of the teaching of cooperation to the environment reward. IBMARL differs in that its imitation prior is trained from R2BC demonstrations collected online \emph{in the presence of} teammates, and the IL policy acts through action proposals and bootstrap targets rather than reward shaping. To our knowledge, no prior work extends IBRL-style bootstrapping to the multi-agent setting.
+
+\section{Problem Formulation and Background}
+\label{sec:formulation}
+
+\subsection{Cooperative Dec-POMDPs}
+Following the notation of R2BC~\cite{mattson2026r2bc}, we formulate
+cooperative multi-robot learning as a decentralized partially observable
+Markov decision process (Dec-POMDP)~\cite{oliehoek2016decpomdp} with
+agents $\mathcal{I} = \{1,\dots,N\}$, joint action space
+$\mathcal{A} = \mathcal{A}_1 \times \dots \times \mathcal{A}_N$, joint
+observation space $\Omega = \Omega_1 \times \dots \times \Omega_N$, and
+discount factor $\gamma$. We consider \emph{shared-reward} games with a
+fixed horizon $T$, in which agent $i$ receives a local observation
+$o_{i,t} \in \Omega_i$ and selects an individual action
+$a_{i,t} \in \mathcal{A}_i$. Distinct from standard MARL, we utilize two
+products of a R2BC training session: (i)~a \emph{frozen} decentralized
+imitation policy $\pi^{\il} = (\pi^{\il}_1, \dots, \pi^{\il}_N)$,
+$\pi^{\il}_i : \Omega_i \rightarrow \mathcal{A}_i$, which we call the
+\emph{IL policy}, and (ii)~its demonstration set
+$\mathcal{D} = \{\mathcal{D}_1, \dots, \mathcal{D}_N\}$ of per-agent
+observation--action transitions. The objective is to learn RL policies
+$\pi_{\theta} = (\pi_{\theta_1}, \dots, \pi_{\theta_N})$ that surpass the
+IL policy with as little online environment interaction as possible.
+
+\subsection{R2BC}
+R2BC~\cite{mattson2026r2bc} trains decentralized per-agent BC policies
+from a demonstrator who cycles round-robin through the team, controlling
+one agent in its own action space while the rest execute their current
+policies; because demonstrations are never given in the joint action
+space, a lone human can teach the whole team online. 
+\subsection{IBRL}
+\indent IBRL~\cite{hu2023ibrl} keeps a pretrained IL policy frozen during
+off-policy RL and uses it in two places: at interaction time the agent
+executes whichever of the IL and RL proposals has the higher value under
+the target Q-function,
+$a_t = \arg\max_{a \in \{a^{\il}, a^{\rl}\}} Q_{\phi'}(s, a)$, and the
+temporal-difference target maximizes over the same pair at the next
+state. Even with few demonstrations and poor standalone BC, this
+combination achieves strong real-robot performance~\cite{hu2023ibrl}.
+
+\subsection{Tasks}
+We instantiate the problem on the \textit{Navigation} and \textit{Buzzwire} tasks of the
+Vectorized Multi-Agent Simulator (VMAS)~\cite{bettini2022vmas} (Fig.~\ref{fig:tasks}).
+In \textit{Navigation}, $N{=}3$ agents and their assigned goals spawn at random in a bounded 2-D workspace, each agent observing its own state, its goal's relative position, and a LiDAR scan of its teammates.
+In \textit{Buzzwire}, $N{=}2$ agents are connected to a ball and must thread it through a narrow corridor to a goal without touching the walls; each agent observes its own position, velocity and relative position to the goal location.
+In both scenarios, agents act through continuous velocity commands over a fixed horizon $T$.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{fig_tasks.pdf}
+\caption{The two VMAS tasks. (a) Navigation: three agents (LiDAR rays shown) each reach their color-matched goal; adapted from~\cite{mattson2026r2bc}. (b) Buzzwire: two agents joined to a ball by rigid links carry it along the corridor to the goal (green).}
+\label{fig:tasks}
+\end{figure}
+
+\indent The native VMAS rewards are dense, which masks the exploration problem
+that demonstrations are meant to solve. We therefore replace them with a
+sparse variant in which an agent is rewarded only once it is near its
+goal in \textit{Navigation}, and only once the ball is near the goal in
+\textit{Buzzwire}:
+\begin{equation}
+\label{eq:reward}
+r_{i,t} \;=\;
+\begin{cases}
+\tilde{r}_{i,t} & \text{if } d_{i,t} < \delta,\\[2pt]
+-1 & \text{otherwise},
+\end{cases}
+\end{equation}
+where $d_{i,t}$ is agent $i$'s distance to its goal (Navigation) or the
+ball's distance to the goal, shared by both agents (Buzzwire), and
+$\tilde{r}_{i,t}$ is the small native VMAS shaping reward. Episodes
+always run the full horizon, so an agent's undiscounted return is
+approximately the negative number of steps spent outside the goal region,
+bounded below by $-T$. Navigation uses $T = 100$ and $\delta = 0.4$; Buzzwire uses
+$T = 200$ and $\delta = 0.1$, below the corridor half-width. The radius
+$\delta$ sets the sparsity, and hence the difficulty, of the task, so the
+difficulty can be set deliberately to measure the effect of IBMARL.
+
+\section{Imitation Bootstrapped MARL}
+\label{sec:method}
+IBMARL extends IBRL~\cite{hu2023ibrl} to the cooperative multi-agent
+setting under centralized training with decentralized
+execution~\cite{lowe2017maddpg}. The IL policy participates in training
+through three mechanisms: it \emph{proposes actions} during exploration,
+it \emph{proposes bootstrap actions} for the temporal-difference target,
+and its demonstrations \emph{pre-populate} the replay buffer. The choice
+between IL and RL proposals is made not by a fixed schedule but by a
+critic-scored \emph{arbiter}, described next, so the IL policy is followed
+exactly as long as the critics judge it to be the better option.
+
+\subsection{Proposals and the Arbiter}
+Given a team observation $\obs = (o_1, \dots, o_N)$, each agent forms two
+candidate actions,
+\begin{equation}
+a^{\rl}_i = \pi_{\theta_i}(o_i) + \varepsilon_i, \qquad
+a^{\il}_i = \pi^{\il}_i(o_i) + \varepsilon'_i,
+\end{equation}
+with i.i.d.\ exploration noise
+$\varepsilon, \varepsilon' \sim \mathcal{N}(0, \sigma^2 I)$ applied to both
+proposals so that arbitration compares like with like, assembled into two
+joint candidates $\act^{\il} = (a^{\il}_1, \dots, a^{\il}_N)$ and
+$\act^{\rl} = (a^{\rl}_1, \dots, a^{\rl}_N)$. Keeping the
+choice between the two policies preserves whatever coordination each
+policy encodes and makes the candidate set size independent of team size
+$N$; a variant that mixes the two policies within each proposal is ablated
+in Sec.~\ref{sec:results}. Each agent maintains an ensemble of $E{=}3$
+centralized critics $Q^{k}_i(\obs, \act)$ with target copies
+$\bar{Q}^{k}_i$. Following REDQ~\cite{chen2021redq}, as adopted by IBRL,
+the arbiter samples two target members $K$, $\lvert K \rvert = 2$, and
+scores each candidate $c\in\{\il,\rl\}$ by
+\begin{equation}
+\label{eq:score}
+\bar{Q}(c) \;=\; \sum_{i=1}^{N} \, \min_{k \in K} \,
+\bar{Q}^{k}_i\!\left(\obs, \act^{c}\right).
+\end{equation}
+The executed candidate is sampled from a Boltzmann distribution over the
+two scores, $c^\ast \sim \operatorname{softmax}_c\big(\bar{Q}(c)/\beta\big)$
+with temperature $\beta = 0.05$ (\emph{soft} arbitration), which retains a
+small probability of executing the lower-valued candidate and so keeps
+supplying the critics with transitions from both policies; taking the
+argmax instead is the \emph{hard} variant.
+
+\subsection{Learning}
+Critics are trained with a TD(0) target that bootstraps through the
+arbiter: at the next observation $\obs'$, the arbiter is applied to
+noise-free proposals from the target actors $\bar{\pi}_{\theta}$ and the
+IL policy, yielding a bootstrap action $\act'^{\ast}$, and every ensemble
+member regresses to
+\begin{equation}
+\label{eq:target}
+y_i = r_i + \gamma\,(1 - \mathds{1}{\text{[terminal]}})\,
+\min_{k \in K} \bar{Q}^{k}_i(\obs', \act'^{\ast}),
+\end{equation}
+so members differ only by initialization, which is what makes the
+minimum over a random pair in \eqref{eq:score} a pessimistic estimate
+rather than noise. Actors are updated with the deterministic policy
+gradient of MADDPG~\cite{lowe2017maddpg,lillicrap2016ddpg} against a fixed
+single member, $\mathcal{L}(\theta_i) = -\,\mathbb{E}\big[Q^{1}_i(\obs,
+\pi_{\theta}(\obs))\big]$, preserving parity with the single-critic
+baselines; actor and critic targets are updated by Polyak averaging with
+rate $\tau$.
+
+\subsection{Data and Implementation}
+IBMARL keeps a single replay buffer per team member, pre-loaded with all
+demonstration transitions in $\mathcal{D}$ and sampled uniformly, in the
+style of IBRL: online transitions are appended and gradually dilute the
+demonstrations, with no separate demonstration buffer and no mixing
+schedule. Updates begin once the buffer holds $W$ online steps; during
+this warm-up the IL policy's noised proposal is executed unconditionally,
+as in IBRL's warm-up episodes, so that the first arbitrated decisions are
+made by critics that have already observed the IL policy reach the goal.
+Actors are
+decentralized per-agent MLPs (two hidden layers of 256 units, $\tanh$);
+critics are centralized over the team's observations and actions.
+Training alternates collection of $F$ environment steps with $G$ gradient
+steps at batch size 1024 (Adam, learning rate $10^{-4}$, $\gamma = 0.99$,
+$\tau = 10^{-3}$, $\sigma = 0.1$, gradient-norm clipping at $1.0$), with
+$F/G/W = 1000/500/5{\times}10^{3}$ on Navigation and
+$8000/2000/4{\times}10^{4}$ on Buzzwire, replay capacities of
+$2{\times}10^{5}$ and $4{\times}10^{5}$ transitions, and budgets of
+$3{\times}10^{5}$ and $6{\times}10^{5}$ environment steps, so the ratio of
+gradient steps to environment steps is the same on both tasks. The implementation is built on
+TorchRL~\cite{bou2024torchrl}.
+
+\section{Experiments}
+\label{sec:setup}
+\textbf{IL policies and demonstrations.} On each task the IL policy is
+the decentralized policy of one R2BC training session (one MLP per agent with
+a single hidden layer of 8 ReLU units), trained from demonstrations given through R2BC's round-robin protocol by
+a synthetic demonstrator: a MAPPO policy trained with the dense reward on
+Navigation, and a scripted controller that holds each agent at a fixed
+lateral offset while driving toward the goal on Buzzwire. The budget is intentionally small: 24 episodes on Navigation and 12 on Buzzwire, 2{,}400 transitions each.
+Twelve was chosen on Buzzwire because the IL policy's return rises
+sharply beyond it ($-90$ at 14 against $-133$ at 12); this IL policy
+reaches the goal in 88\% of episodes but does not remain there, leaving a
+clear margin for RL. The frozen IL policies attain $-48.7$ and $-137.5$.
+All
+demonstration-based methods consume the same transitions and, where
+applicable, the same IL policy checkpoint.
+
+\textbf{Baselines} share IBMARL's architectures, DDPG-style
+updates~\cite{lillicrap2016ddpg}, exploration noise and hyperparameters,
+with a single critic per agent, so that \emph{how} demonstrations are used
+is the only variable. \textbf{MADDPG}~\cite{lowe2017maddpg} is the
+demonstration-free reference. \textbf{RLfD}~\cite{vecerik2017ddpgfd}
+keeps the demonstrations in a separate replay buffer from which each
+minibatch draws a fraction annealed linearly from 50\% to 0\% over
+training. \textbf{RFT} adds a behavior-cloning regularizer
+$\alpha\,\lambda(t)\,\lVert \pi_{\theta}(o^{\mathcal{D}}) -
+a^{\mathcal{D}} \rVert_2^2$ to the actor
+loss~\cite{rajeswaran2018dapg,nair2018overcoming}, with $\alpha = 0.1$
+and $\lambda(t)$ annealed from 1 to 0 over the first half of training.
+
+\textbf{Ablations.} \emph{Per-agent mixing} expands the candidate set to
+all $2^N$ per-agent IL/RL combinations; \emph{hard} replaces
+Boltzmann sampling with argmax; \emph{single-critic} sets $E{=}1$.
+
+\textbf{Protocol.} Policies are evaluated without exploration noise on a
+dedicated environment, 20 episodes every $10^3$ steps on Navigation and
+40 episodes every $3.2{\times}10^4$ steps on Buzzwire. IBMARL is
+evaluated with the policy it executes, in which the target critics
+arbitrate greedily between the IL policy's and the RL actors' joint actions,
+as IBRL reports. We report the per-agent mean return, smoothed with a
+centered window of 9 evaluations on Navigation and 3 on Buzzwire; bands
+show $\pm 1$ s.e.m.
+
+\subsection{Results}
+\label{sec:results}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{fig_results.pdf}
+\caption{Evaluation return (mean $\pm$ s.e.m.) on Navigation (left) and Buzzwire (right); top: baselines, bottom: arbiter variants. Dashed line: frozen IL policy.}
+\label{fig:main}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+ & \multicolumn{2}{c}{Navigation} & \multicolumn{2}{c}{Buzzwire} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+Method & Steps & Final return & Steps & Final return \\
+\midrule
+IBMARL (ours) & \textbf{43} (5/5) & $-20.7 \pm 1.1$ & \textbf{168} (5/5) & $\mathbf{-84.5 \pm 14.8}$ \\
+RLfD          & 122 (5/5) & $\mathbf{-19.6 \pm 1.2}$ & 296 (5/5) & $-85.9 \pm 18.2$ \\
+RFT           & 198 (5/5) & $-35.0 \pm 10.9$ & 296 (5/5) & $-111.2 \pm 10.9$ \\
+MADDPG        & 197 (3/5) & $-43.9 \pm 14.9$ & --- (0/5) & $-194.6 \pm 5.7$ \\
+\midrule
+w/ per-agent mixing & 80 (5/5) & $-21.6 \pm 2.8$ & 136 (5/5) & $-81.6 \pm 13.9$ \\
+w/o soft selection & 54 (3/3) & $-22.6 \pm 4.1$ & 168 (3/3) & $-80.7 \pm 12.4$ \\
+w/o critic ensemble & 42 (3/3) & $-20.4 \pm 0.5$ & 168 (3/3) & $-77.3 \pm 3.6$ \\
+\midrule
+R2BC (IL policy) & --- & $-48.7$ & --- & $-137.5$ \\
+\bottomrule
+\end{tabular}}
+\\[2pt]
+\caption{Median steps ($\times 10^3$) to first exceed the IL policy (seeds
+reaching it) and final return over the last 10 evaluations (mean $\pm$
+s.d.\ over seeds).}
+\label{tab:results}
+\end{table}
+
+\textbf{Navigation.} \todo{Navigation figures and numbers are placeholders from the paper3 sweep (pre-fix arbiter, no IL warm-up); they will be replaced by the paper4 re-run, assumed to give similar results.}
+IBMARL surpasses the IL policy after a median of 43k environment
+steps---$2.8\times$ fewer than RLfD (122k) and $4.6\times$ fewer than RFT
+(198k), while MADDPG reaches the IL policy in only 3 of 5 seeds within the
+300k budget; at 100k steps IBMARL's return is $-29.3$, against $-55.4$
+for RLfD, $-81.5$ for RFT, and $-82.2$ for MADDPG (Fig.~\ref{fig:main}).
+With the full budget RLfD ($-19.6 \pm 1.2$) and IBMARL ($-20.7 \pm 1.1$)
+are comparable, their curves crossing near 200k steps; RFT
+($-35.0 \pm 10.9$) and MADDPG ($-43.9 \pm 14.9$) remain below, and MADDPG
+is bimodal: two seeds approach $-28$ while the other three finish between
+$-61$ and $-50$, at or below the IL policy. Among the arbiter variants
+only \emph{per-agent mixing} has an observable effect: every mixing seed
+crosses the IL policy later (52--85k steps, median 80k) than every IBMARL
+seed but one (42--55k), with the same final return; \emph{hard} and \emph{single-critic} are
+indistinguishable from IBMARL (Table~\ref{tab:results}).
+
+\textbf{Buzzwire.} This task is considerably harder: MADDPG never
+reaches the goal in any seed ($-194.6 \pm 5.7$ against a floor of $-200$).
+IBMARL reaches the IL policy's level after a median of 168k steps,
+$1.8\times$ fewer than RLfD and RFT (296k each), and at 200k steps its
+return is $-108.5$ against $-170.2$ for RLfD and $-156.8$ for RFT; its
+final return, $-84.5 \pm 14.8$, is comparable to RLfD's $-85.9 \pm 18.2$. At the end of training the arbiter still selects the IL policy's joint
+action in 29--50\% of evaluation decisions. The arbiter variants are indistinguishable
+(Table~\ref{tab:results}): \emph{per-agent mixing} crosses the
+IL policy at a median of 136k steps and \emph{hard} and
+\emph{single-critic} at 168k, with final returns within seed noise.
+
+\section{Discussion and Limitations}
+\label{sec:discussion}
+Our results have shown that by combining MARL and R2BC we were able to
+produce a sample-efficient method that reaches near optimal performance
+sooner than either could achieve individually. By anchoring both
+exploration and the bootstrap target to IL proposals, IBMARL replaces
+MARL's joint-action search with a choice between two coherent joint
+actions, which is most valuable when moderate demonstration data reaches
+much of the task but closing the remaining gap with demonstrations alone
+would demand far more human effort than a small amount of RL fine-tuning;
+once online interaction is plentiful, replay-based RLfD catches up, so
+IBMARL's advantage is best characterized as sample efficiency, the binding
+constraint for physical multi-robot teams. The IL warm-up matters most on
+Buzzwire, where RL alone never reaches the goal: without it, an untrained
+critic's first arbitrations are arbitrary, and a run whose opening batches are RL-heavy may never observe a success. Per-agent mixing slowing
+learning on Navigation is counterintuitive, as it strictly enlarges the
+candidate set, but a mixed candidate is one that neither policy would
+produce, so its value is extrapolated by critics that have not seen such
+transitions. The penalty does not appear on Buzzwire, where the two variants are
+indistinguishable. Like R2BC and IBRL, we implicitly assume near-optimal demonstrations;
+suboptimal demonstrations can misdirect value prediction, and filtering
+to transitions where the critic believes the demonstrator is better than
+the learner~\cite{nair2018overcoming} is an unevaluated safeguard. More
+simulated tasks and hardware validation are the natural next steps.
+
+\section{Conclusion}
+We introduced IBMARL, in which a decentralized R2BC IL policy proposes
+actions during exploration, shapes bootstrap targets, and pre-populates
+the replay buffer of centralized-critic MARL. IBMARL surpasses its IL policy
+with $2.8$--$4.6\times$ fewer environment interactions than
+demonstration-based baselines on Navigation and $1.8\times$ fewer than
+both on Buzzwire, suggesting that realistic single-agent demonstrations are a practical
+lever for sample-efficient sparse-reward MARL on physical multi-robot
+teams.
+
+\begin{thebibliography}{00}
+\bibitem{mattson2026r2bc} C. Mattson, V. Raveendra, E. Novoseller, N. Waytowich, V. J. Lawhern, and D. S. Brown, ``R2BC: Multi-agent imitation learning from single-agent demonstrations,'' in \textit{IEEE Int. Conf. on Robotics and Automation (ICRA)}, 2026.
+\bibitem{hu2023ibrl} H. Hu, S. Mirchandani, and D. Sadigh, ``Imitation bootstrapped reinforcement learning,'' in \textit{Robotics: Science and Systems (RSS)}, 2024.
+\bibitem{hester2018dqfd} T. Hester \textit{et al.}, ``Deep Q-learning from demonstrations,'' in \textit{AAAI Conf. on Artificial Intelligence}, 2018.
+\bibitem{vecerik2017ddpgfd} M. Ve\v{c}er\'{i}k \textit{et al.}, ``Leveraging demonstrations for deep reinforcement learning on robotics problems with sparse rewards,'' arXiv preprint arXiv:1707.08817, 2017.
+\bibitem{nair2018overcoming} A. Nair, B. McGrew, M. Andrychowicz, W. Zaremba, and P. Abbeel, ``Overcoming exploration in reinforcement learning with demonstrations,'' in \textit{IEEE Int. Conf. on Robotics and Automation (ICRA)}, 2018.
+\bibitem{turco2024cognitive} E. Turco, C. Castellani, V. Bo, C. Pacchierotti, D. Prattichizzo, and T. Lisini Baldi, ``Reducing cognitive load in teleoperating swarms of robots through a data-driven shared control approach,'' in \textit{IEEE/RSJ Int. Conf. on Intelligent Robots and Systems (IROS)}, 2024.
+\bibitem{lowe2017maddpg} R. Lowe, Y. Wu, A. Tamar, J. Harb, P. Abbeel, and I. Mordatch, ``Multi-agent actor-critic for mixed cooperative-competitive environments,'' in \textit{Advances in Neural Information Processing Systems (NeurIPS)}, 2017.
+\bibitem{lillicrap2016ddpg} T. P. Lillicrap \textit{et al.}, ``Continuous control with deep reinforcement learning,'' in \textit{Int. Conf. on Learning Representations (ICLR)}, 2016.
+\bibitem{rajeswaran2018dapg} A. Rajeswaran \textit{et al.}, ``Learning complex dexterous manipulation with deep reinforcement learning and demonstrations,'' in \textit{Robotics: Science and Systems (RSS)}, 2018.
+\bibitem{chen2021redq} X. Chen, C. Wang, Z. Zhou, and K. W. Ross, ``Randomized ensembled double Q-learning: Learning fast without a model,'' in \textit{Int. Conf. on Learning Representations (ICLR)}, 2021.
+\bibitem{bettini2022vmas} M. Bettini, R. Kortvelesy, J. Blumenkamp, and A. Prorok, ``VMAS: A vectorized multi-agent simulator for collective robot learning,'' in \textit{Int. Symp. on Distributed Autonomous Robotic Systems (DARS)}, 2022.
+\bibitem{bou2024torchrl} A. Bou \textit{et al.}, ``TorchRL: A data-driven decision-making library for PyTorch,'' in \textit{Int. Conf. on Learning Representations (ICLR)}, 2024.
+\bibitem{oliehoek2016decpomdp} F. A. Oliehoek and C. Amato, \textit{A Concise Introduction to Decentralized POMDPs}. Springer, 2016.
+\bibitem{albrecht2024marl} S. V. Albrecht, F. Christianos, and L. Sch\"{a}fer, \textit{Multi-Agent Reinforcement Learning: Foundations and Modern Approaches}. MIT Press, 2024.
+\bibitem{alagha2023democloning} A. Alagha, R. Mizouni, J. Bentahar, H. Otrok, and S. Singh, ``Multiagent deep reinforcement learning with demonstration cloning for target localization,'' \textit{IEEE Internet of Things Journal}, vol. 10, no. 15, 2023.
+\bibitem{sartoretti2019primal} G. Sartoretti, J. Kerr, Y. Shi, G. Wagner, T. K. S. Kumar, S. Koenig, and H. Choset, ``PRIMAL: Pathfinding via reinforcement and imitation multi-agent learning,'' \textit{IEEE Robotics and Automation Letters}, vol. 4, no. 3, 2019.
+\bibitem{yu2025pegmarl} P. Yu, M. Mishra, A. Koppel, C. Busart, P. Narayan, D. Manocha, A. S. Bedi, and P. Tokekar, ``Beyond joint demonstrations: Personalized expert guidance for efficient multi-agent reinforcement learning,'' arXiv preprint arXiv:2403.08936, 2025.
+\end{thebibliography}
+
+\end{document}
