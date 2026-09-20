@@ -18,8 +18,11 @@ Smoke-testing a plan before committing GPU-days to it: use a throwaway --tag
 (so nothing real is resumed into), --max-seeds 1, and enough --n-iters to get
 PAST the warm-up, or the IBMARL variants never take a gradient step and the
 training path goes untested.  On buzz_wire warm-up ends once the buffer
-reaches ibmarl_min_warm_up_frames (40k) -- iteration 5 at 8k frames/iteration
-with the demos pre-loaded -- so --n-iters 7 is the first value that trains.
+reaches ibmarl_min_warm_up_frames (40k); with the 1,698 demo transitions
+pre-loaded and 8k frames/iteration that is 1698 + 8000(k+1) >= 40000, so
+iterations 0-3 are warm-up and iteration 4 is the first to train.  --n-iters 5
+is the minimum that trains at all; 7 gives three training iterations, which is
+what makes an eval land outside warm-up too (eval_interval 4).
 """
 
 from __future__ import annotations
