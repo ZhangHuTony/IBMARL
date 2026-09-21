@@ -15,7 +15,7 @@ working directory.
 | task | R2BC run (source of every file below) | files |
 |---|---|---|
 | navigation | `navigation_r2bc_decent_20260129_201300` — 24 demos, collected against a 0.4-radius sparse basin | `policy_checkpoint.pth`, `demonstrations.pt`, `demonstrations_binary.pt`, `metadata.json` |
-| buzz_wire | `buzzwire_r2bc_decent_20260920_141123` — 6 demos (`--total_demonstrations 6 --total_samples 3`) | same four |
+| buzz_wire | `buzzwire_r2bc_decent_20260921_021440` — 6 demos of a detuned demonstrator, gain 0.9 (`--total_demonstrations 6 --total_samples 3 --move_factor 0.9`) | same four |
 | balance | `balance_r2bc_decent_20260823_185058` | `policy_checkpoint.pth`, `demonstrations.pt`, `metadata.json` |
 | transport | `transport_r2bc_decent_20260821_154402` | `policy_checkpoint.pth`, `metadata.json` — **demos not bundled** |
 
@@ -47,19 +47,26 @@ still uses the legacy schema and loads `demonstrations.pt` directly.
 Caveat for buzz_wire: online, wall contact ends the episode with 0, but the
 recording cannot reveal collisions (the ball is not in the observation), so
 relabelled episodes are cut at the basin regardless of an earlier touch, and
-the demo file is optimistic by however often that happens.  The 8% figure
-measured for the 12-demo teacher (2026-09-19) does NOT carry over to the
-6-demo teacher bundled today: collision rate is exactly what the demo-count
-cliff is made of (see config/experiments/ibmarl_buzz_wire.yaml), so a weaker
-teacher scrapes the wire more often.  Unmeasured for this teacher; its 4-of-6
-relabelled successes are an upper bound on what it would score online.
+the demo file is optimistic by however often that happens.  For the current
+teacher this matters less than it did: it is weak by being SLOW (demonstrator
+gain 0.9), so its failures are mostly arrivals past the 200-step horizon --
+3 of its 6 demos never reach the basin at all, and the other three arrive at
+steps 42 / 137 / 173.  Contact rate for this teacher is unmeasured.
 
-Teacher swapped from 12 demos to 6 on 2026-09-20 to open RL headroom: 0.770
-+/- 0.021 success against the 12-demo teacher's 0.882 +/- 0.016 (bc_eval, 400
-episodes).  The demonstrations were swapped with it -- they come from the same
-run -- so the demo budget the RLfD/RFT baselines and the IBMARL buffer
-pre-load consume halved too, from 1,698 relabelled transitions to 855.  Curves
-recorded before this date used the 12-demo teacher and a double-size demo set.
+Teacher history on this task (6 demos throughout since 2026-09-20; measured
+under the binary schema, 400 fresh episodes):
+
+* 2026-09-20: 12-demo -> 6-demo teacher, tuned demonstrator (gain 4.0):
+  0.882 -> 0.770.  Demo count is a cliff (2: 0.010, 4: 0.037, 6: 0.770), so it
+  could not go lower.
+* 2026-09-21: demonstrator gain 4.0 -> 0.9, same 6-demo budget: 0.765 -> 0.492
+  +/- 0.025.  The gain dial is non-monotone -- 2.5 gives the STRONGEST teacher
+  (0.948, fewer wire contacts) and only below ~1.5 does slowness dominate; the
+  full grid is in `config/experiments/ibmarl_buzz_wire.yaml`.  The
+  demonstrations are swapped with the checkpoint (same run), so the demo set
+  the RLfD/RFT baselines and the IBMARL buffer pre-load consume changed too:
+  952 relabelled transitions, 3 of 6 episodes reaching the goal (buzzwire4:
+  855 and 4 of 6).  Curves recorded before this date used the gain-4.0 teacher.
 
 ## Transport demonstrations
 

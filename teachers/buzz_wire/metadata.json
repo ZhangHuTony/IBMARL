@@ -1,7 +1,7 @@
 {
-  "timestamp": "20260920_141123",
+  "timestamp": "20260921_021440",
   "python_version": "3.10.12",
-  "command_line": "/home/tony-zhang/Research/ibmarl/R2BC/src/run_experiment.py buzz_wire r2bc_decent --total_demonstrations 6 --total_samples 3 --seed_start 0 --num_seeds 1",
+  "command_line": "/home/tony-zhang/Research/ibmarl/R2BC/src/run_experiment.py buzz_wire r2bc_decent --total_demonstrations 6 --total_samples 3 --seed_start 0 --num_seeds 1 --move_factor 0.9",
   "working_directory": "/home/tony-zhang/Research/ibmarl/R2BC",
   "data_path": null
 }

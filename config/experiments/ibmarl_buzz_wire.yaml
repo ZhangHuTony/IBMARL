@@ -3,63 +3,55 @@
 # named here (strict/soft/temperature/num_critics/exploration_noise/warm-up) keeps
 # its default.
 
-# R2BC teacher distilled from the tuned SimpleBuzzwireHeuristic demonstrator
-# (target_x 0.5, gain 4.0): 6 demonstrations, 1,200 transitions, collected with
-# gt_radius 0.1 on a fixed 200-step horizon.
+# R2BC teacher distilled from 6 demonstrations (1,200 transitions, gt_radius 0.1,
+# fixed 200-step horizon) of a DETUNED SimpleBuzzwireHeuristic demonstrator:
+# gain (move_factor) 0.9 instead of the tuned 4.0, target_x 0.5 unchanged.
+# R2BC run buzzwire_r2bc_decent_20260921_021440 (`--move_factor 0.9`, a flag
+# added to R2BC on 2026-09-21; teachers/buzz_wire/metadata.json has the command).
 #
-# DELIBERATELY WEAKENED from the 12-demo teacher used through buzzwire3, to open
-# headroom for the RL side: 0.770 success against 0.882, i.e. 23 points of room
-# to improve instead of 12.
+# Teacher level: 0.492 +/- 0.025 success over 400 freshly drawn episodes
+# (analysis/teacher_success_curve.py, 2026-09-21).  bc_eval measures the same
+# checkpoint on the dedicated eval env at `eval_episodes` (200) per seed, so its
+# number is comparable; the old 40-episode caveat no longer applies.
 #
-# Teacher level: 0.770 +/- 0.021 over 400 freshly-drawn episodes (2026-09-20).
+# WHY: buzzwire4's teacher (gain 4.0, 6 demos, 0.765) left 23 points of headroom
+# and every IBMARL arm saturated at ~1.0 within 8-16 iterations, so the ablation
+# arms were indistinguishable at the eval cadence.  Target was 0.4-0.5.
 #
-# WARNING -- bc_eval will NOT report that number.  Its eval env is fixed-seed
-# and yields exactly 40 episodes (n_episodes 20 vs n_envs 40 means
-# n_rollouts = ceil(20/40) = 1), and on that particular draw this teacher
-# scores 0.875 while the 12-demo teacher it replaced scores 0.850 -- i.e. the
-# protocol ranks the weakened teacher ABOVE the stronger one.  Separating
-# 0.770 from 0.882 at 2 sigma needs ~90 episodes; 40 gives +/-0.126.  The
-# weakening is real and the RL side does face it (warm-up and arbitration run
-# on freshly-seeded envs, not the eval set), but the reference line printed
-# next to the learning curves is not measuring it.  Raise the eval episode
-# count before reading any buzz_wire result as a success rate.
+# Demonstrator-gain grid under the BINARY TERMINAL schema, 6 demos, seed 0,
+# 400 episodes per point (2026-09-21):
+#    4.0: 0.765  3.0: 0.930  2.5: 0.948  2.0: 0.920  1.5: 0.725
+#    1.25: 0.625  1.0: 0.575  0.9: 0.492  0.85: 0.475  0.75: 0.385
 #
-# Demo-count curve under the BINARY TERMINAL schema, seed 0, 400-episode
-# bc_eval per point (2026-09-20).  Every point is the same incremental
-# collection truncated, so the 6-demo checkpoint IS this curve's 6-demo point:
-#    2: 0.010   4: 0.037   6: 0.770   8: 0.815   10: 0.900   12: 0.882
+# The dial is NON-MONOTONE.  Lowering the gain from 4.0 first STRENGTHENS the
+# teacher -- a gentler push scrapes the wire less, and 2.5 is the best
+# demonstrator at 0.95 -- and only below ~1.5 does slowness take over: arrivals
+# slip past the 200-step horizon.  So the "tuned" 4.0 was already a mildly
+# detuned demonstrator, and this teacher is weak by being SLOW, not by
+# colliding: the recorded demos first reach the basin at steps 42 / 137 / 173
+# and 3 of the 6 never do (teachers/README.md).  Below 1.0 the dial is smooth
+# (0.75 -> 0.385, 0.85 -> 0.475, 0.9 -> 0.492, 1.0 -> 0.575).
 #
-# The curve is BIMODAL, not a gradient: it jumps from 0.037 to 0.770 between 4
-# and 6 demos, and demos are collected one per agent per round so odd counts do
-# not exist.  6 is therefore the lowest teacher that functions at all -- there
-# is no 0.25 or 0.5 teacher to be had by starving demonstrations, at any
-# granularity.
+# Demo COUNT is not the knob: under this schema it is bimodal (2: 0.010,
+# 4: 0.037, 6: 0.770, 8: 0.815, 10: 0.900, 12: 0.882 at gain 4.0, 2026-09-20),
+# because the sub-6 policies reach the goal and scrape the wire on the way, and
+# reward() pays _success() & ~collided.
 #
-# Why the cliff, and why the sub-6 teachers are not usable: under the legacy
-# -1/step schema these same checkpoints scored -184.3 / -179.5 (2 / 4 demos),
-# which reads as ~16-20 steps per episode spent inside the basin -- impossible
-# if they reached the goal only 1-4% of the time.  Legacy scoring ignored
-# collisions and this schema does not (reward() pays _success() & ~collided),
-# so the sub-6 policies DO drive the ball to the goal and simply scrape the
-# wire on the way.  Their proposals would be executed unconditionally during
-# teacher warm-up, so a "weak" teacher chosen from below the cliff would be
-# actively harmful rather than merely unhelpful.
-#
-# The legacy-unit curve this replaces (-184.3 / -179.5 / -167.3 / -165.1 /
-# -132.2 / -133.6 at 2..12) ranked the same checkpoints differently because it
-# scored how long the ball was HELD in the basin.  Under the binary schema the
-# episode ends on arrival, so holding no longer exists and only arriving
-# cleanly counts.  Do not compare the two sets of numbers.
+# Do NOT rank teachers by R2BC's own metrics.csv: it scores under the legacy
+# -1/step schema, which ignores wall contact and rewards holding the basin, and
+# orders these checkpoints differently (gain 0.9: -164.8, 2.5: -140.5, 4.0:
+# -167.3 at 6 demos).
 r2bc_checkpoint_path: "teachers/buzz_wire/policy_checkpoint.pth"
 demonstrations_path: "teachers/buzz_wire/demonstrations_binary.pt"
 
-# 855 demo transitions (6 episodes, 4 of them reaching the goal) against 600k
+# 952 demo transitions (6 episodes, 3 of them reaching the goal) against 600k
 # collected frames.  Navigation collects 300k against a 200k buffer, so its
 # demos survive the first 67% of the run at a 1.2% fill fraction.  400k
 # reproduces that survival fraction exactly (the ring wraps 400k frames in,
-# i.e. iter 50/75 at 8k frames/iter).  The fill fraction is now 0.21%, half of
-# what the 12-demo teacher gave -- but the SURVIVAL fraction, which is what
-# this number sizes, is unaffected by how many demos there are.
+# i.e. iter 50/75 at 8k frames/iter) at a 0.24% fill fraction.  Since
+# buzzwire5, config/environments/buzz_wire.yaml sets memory_size to the same
+# 400k for EVERY method, so the buffer is no longer a difference between the
+# arms; this key stays equal to it.
 ibmarl_replay_size: 400000
 
 # --- Warm-up ----------------------------------------------------------------
@@ -72,12 +64,20 @@ ibmarl_replay_size: 400000
 # while the three seeds that opened below 30% RL all crossed the teacher.
 #
 # 40k frames = 5 iterations = 10% of the buffer, counted against the 600k
-# budget.  UNCHANGED from the 12-demo teacher, and the weakening does not
-# threaten it: successful episodes end at the goal (median arrival step 92 for
-# this teacher, from the demo recording) and failures run the full 200, so 40k
-# frames buys roughly 350 episodes of which ~270 succeed.  The 12-demo teacher
-# gave ~470 episodes and ~410 successes -- less signal, same order, still far
-# above the handful that decided buzzwire1's bad seeds.  Revisit this if the
-# teacher is ever weakened past the point where most warm-up episodes fail.
+# budget.  UNCHANGED across teachers; the arithmetic at this one: successes
+# end at the goal (this teacher arrives late, ~120-170 steps, see the demo
+# arrival steps above) and failures run the full 200, so 40k frames buys
+# roughly 230-250 episodes of which ~110-120 succeed.  buzzwire4's 0.765
+# teacher gave ~350 / ~270, the 12-demo one ~470 / ~410 -- less signal, same
+# order, still far above the handful that decided buzzwire1's bad seeds.
+# Revisit if the teacher is ever weakened past the point where most warm-up
+# episodes fail.
+#
+# Known transient it does not remove (buzzwire4, every seed): at the first
+# arbitrated iteration the critic, trained on teacher data only, prefers the
+# untrained RL actor's proposals ~97% of the time and the executed policy drops
+# to ~0 success for 2-3 iterations before the collected RL failures pull the
+# arbiter back.  Invisible in the RL-actor protocol, visible in the arbitrated
+# one and in episode_reward_mean.
 ibmarl_warm_up_policy: teacher
 ibmarl_min_warm_up_frames: 40000
