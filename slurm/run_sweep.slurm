@@ -1,16 +1,29 @@
 #!/bin/bash
-# One (variant, seed) run per array task -- 8 variants x 5 seeds = 40 tasks.
+# One (variant, seed) run per array task, for any scenario.
 #
-#   sbatch slurm/run_sweep.slurm                 # the whole sweep
-#   sbatch --array=5,12 slurm/run_sweep.slurm    # re-run two killed tasks
+#   sbatch slurm/run_sweep.slurm                                   # buzzwire5 (defaults below)
+#   sbatch -J tr800 --export=ALL,SCENARIO=transport,TAG=transport800,RESUME_INTERVAL=20 \
+#          --array=3-24,28-39 slurm/run_sweep.slurm                # transport800's missing tasks
+#   sbatch --array=5,12 slurm/run_sweep.slurm                      # re-run two killed tasks
 #
-# One run per task because the 8 h cap does not fit 5 seeds of one variant at
-# --jobs 3 on a 2080 (~7-8 h per IBMARL run when three share a GPU).  A run
-# alone on its GPU is well inside 8 h, and paper_run's resume point every
-# `--resume-interval` iterations means a walltime kill costs at most that many
-# iterations: resubmit the same index and it continues.  Results land in the
-# canonical results/<tag>/<variant>/seed_N layout that analysis/paper3_figures.py
-# reads directly (buzzwire4 needed symlinks because each task had its own tag).
+# Index -> (variant, seed): variant = METHODS[idx / SEEDS], seed = idx % SEEDS.
+# With 8 methods x 5 seeds: bc_eval 0-4, maddpg 5-9, rlfd 10-14, rft 15-19,
+# ibmarl 20-24, ibmarl_gated_a0.4 25-29, ibmarl_strict_gated_a0.4 30-34,
+# ibmarl_gated_a0.4_1critic 35-39.
+#
+# One run per task because the 8 h cap does not fit several seeds sharing a GPU
+# (~7-8 h per buzz-wire IBMARL run when three share a 2080), and because
+# results then land in the canonical results/<tag>/<variant>/seed_N layout that
+# analysis/paper3_figures.py reads directly.
+#
+# Two guards make the array safe to resubmit as a whole:
+#   * a task whose status.json already says ok exits immediately, so
+#     `sbatch --array=0-39` over a half-finished tag only runs what is missing;
+#   * a task that reaches the walltime is stopped by `timeout` with margin for
+#     its last resume point, then resubmits ITSELF with the same index; paper_run
+#     continues from results/<tag>/<variant>/seed_N/checkpoints/resume.  A
+#     transport run (~800 iterations at ~30 s each alone on a 2080) needs this;
+#     a buzz-wire run should not.
 #SBATCH --job-name=bw5
 #SBATCH --account=dbrown-gpu-np
 #SBATCH --partition=dbrown-gpu-np
@@ -21,24 +34,49 @@
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --array=0-39
-#SBATCH -o /uufs/chpc.utah.edu/common/home/u1183156/logs/bw5-%A_%a.out
+#SBATCH -o /uufs/chpc.utah.edu/common/home/u1183156/logs/%x-%A_%a.out
 
 set -euo pipefail
 
-source ~/miniforge3/etc/profile.d/conda.sh
-conda activate ibmarl
-cd ~/code/IBMARL
+SCENARIO=${SCENARIO:-buzz_wire}
+TAG=${TAG:-buzzwire5}
+SEEDS=${SEEDS:-5}
+# Iterations between resume points.  Each one dumps the replay buffer: ~330 MB
+# for transport's 1M-frame buffer, so every 5 iterations (~2.5 min) would be
+# mostly I/O there; 20 is ~10 min of lost work at most.  buzz-wire's is smaller.
+RESUME_INTERVAL=${RESUME_INTERVAL:-5}
+# Wall clock handed to the run before it is stopped for resubmission: the
+# --time above minus margin for the final resume dump and teardown.
+RUN_TIMEOUT=${RUN_TIMEOUT:-7h20m}
+REPO=${REPO:-$HOME/code/IBMARL}
+SCRIPT="$REPO/slurm/run_sweep.slurm"
 
-python -c "import torch; assert torch.cuda.is_available()" || { echo "no CUDA on $(hostname)"; exit 1; }
-
-TAG=buzzwire5
-SEEDS=5
 METHODS=(bc_eval maddpg rlfd rft ibmarl ibmarl_gated_a0.4 ibmarl_strict_gated_a0.4 ibmarl_gated_a0.4_1critic)
 V=${METHODS[$((SLURM_ARRAY_TASK_ID / SEEDS))]}
 S=$((SLURM_ARRAY_TASK_ID % SEEDS))
-echo "task $SLURM_ARRAY_TASK_ID -> $V seed $S on $(hostname)  (tag $TAG)"
+echo "task $SLURM_ARRAY_TASK_ID -> $V seed $S  scenario=$SCENARIO tag=$TAG  on $(hostname)"
 
+source ~/miniforge3/etc/profile.d/conda.sh
+conda activate ibmarl
+cd "$REPO"
+
+STATUS="results/$TAG/$V/seed_$S/status.json"
+if [ -f "$STATUS" ] && python -c "import json,sys; sys.exit(0 if json.load(open('$STATUS')).get('ok') else 1)"; then
+  echo "already done ($STATUS says ok) -- nothing to do"; exit 0
+fi
+
+python -c "import torch; assert torch.cuda.is_available()" || { echo "no CUDA on $(hostname)"; exit 1; }
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
-python -m analysis.paper_run \
-  --variant "$V" --seed "$S" --scenario buzz_wire --tag "$TAG" \
-  --resume-interval 5
+
+set +e
+timeout --signal=INT "$RUN_TIMEOUT" python -m analysis.paper_run \
+  --variant "$V" --seed "$S" --scenario "$SCENARIO" --tag "$TAG" \
+  --resume-interval "$RESUME_INTERVAL"
+rc=$?
+set -e
+if [ $rc -eq 124 ]; then
+  echo "walltime: stopped at $RUN_TIMEOUT, resubmitting index $SLURM_ARRAY_TASK_ID to continue from its resume point"
+  sbatch -J "$SLURM_JOB_NAME" --export=ALL --array="$SLURM_ARRAY_TASK_ID" "$SCRIPT"
+  exit 0
+fi
+exit $rc
