@@ -49,8 +49,12 @@ set -euo pipefail
 
 SEEDS=${SEEDS:-5}
 # Wall clock handed to the run before it is stopped for resubmission: the
-# --time above minus margin for the final resume dump and teardown.
-RUN_TIMEOUT=${RUN_TIMEOUT:-7h20m}
+# --time above minus margin for the final resume dump and teardown.  GNU
+# timeout takes ONE number with ONE unit suffix -- "7h20m" is rejected with
+# exit 125 before the run starts (that failed an entire 80-task array on
+# 2026-09-21), so this is minutes.
+RUN_TIMEOUT=${RUN_TIMEOUT:-440m}
+timeout --signal=INT "$RUN_TIMEOUT" true || { echo "RUN_TIMEOUT=$RUN_TIMEOUT is not a duration GNU timeout accepts"; exit 1; }
 REPO=${REPO:-$HOME/code/IBMARL}
 SCRIPT="$REPO/slurm/run_sweep.slurm"
 
