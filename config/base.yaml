@@ -20,7 +20,6 @@ training:
   # DDPG 
   gamma: 0.99 #discount factor
   polyak_tau: 0.001 #target network update rate
-  num_critic_updates: 3
 
 
 ### Quick Test

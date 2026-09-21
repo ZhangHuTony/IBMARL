@@ -1,4 +1,4 @@
 # Balance-specific overlay for bc_eval -- the teacher reference line.
-# Supersedes the stale /home/connor/... path in config/experiments/bc_eval.yaml.
+# Supersedes the navigation teacher in config/experiments/bc_eval.yaml.
 # Same checkpoint IBMARL bootstraps from (see ibmarl_balance.yaml).
 r2bc_checkpoint_path: "results/balance_r2bc_decent_20260908_102619/policy_checkpoint.pth"

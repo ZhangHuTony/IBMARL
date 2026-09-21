@@ -1,0 +1,10 @@
+# Transport-specific overlay for RLfD -- the same demos IBMARL bootstraps from.
+# Without this, rlfd.yaml's navigation demos (18-dim obs) would be loaded into an
+# 11-dim transport buffer, mirroring the hazard rlfd_balance.yaml guards against.
+#
+# 204 episodes / 122,400 transitions, 3 agents, obs 11, act 2, dense rewards.
+# Bundled since 2026-09-21 as teachers/transport/demonstrations.pt: the R2BC
+# recording re-saved as float32 tensors (36.8 MB; the original's 95 MB was
+# pickled per-step lists of the same values, verified identical on round-trip).
+# Resolved against the checkout by src/util/paths.py like every other teacher.
+demonstrations_path: "teachers/transport/demonstrations.pt"

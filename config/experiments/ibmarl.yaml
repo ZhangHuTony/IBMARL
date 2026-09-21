@@ -18,8 +18,8 @@ extends: "../base.yaml"
 # r2bc_checkpoint_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_153124/policy_checkpoint.pth" #24 demonstrations
 # demonstrations_path: "/home/tony-zhang/Research/R2BC/results/navigation_r2bc_decent_20260129_153124/demonstrations.pt"
 
-r2bc_checkpoint_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/navigation_r2bc_decent_20260129_201300/policy_checkpoint.pth" #24 demonstrations .25 radius
-demonstrations_path: '/home/tony-zhang/Research/ibmarl/R2BC/results/navigation_r2bc_decent_20260129_201300/demonstrations.pt'
+r2bc_checkpoint_path: "teachers/navigation/policy_checkpoint.pth" #24 demonstrations .25 radius
+demonstrations_path: 'teachers/navigation/demonstrations_binary.pt'
 
 # r2bc_checkpoint_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/policy_checkpoint.pth" #24 demonstrations .4 radius
 # demonstrations_path: "/home/connor/Desktop/Projects/R2BC/results/suboptimal_navigation_decent_r2bc/demonstrations.pt"
@@ -42,7 +42,15 @@ ibmarl_warm_up_policy: arbiter
 strict : False #choose best combinatoion of policies or better policy actions
 
 soft : True
-temperature: 0.05
+# 0.0005 = 0.05 x (1 - gamma).  Under binary_terminal_reward every Q-gap between
+# the teacher's and the RL actor's proposals is (1 - gamma) times what it was
+# under the legacy -1/step schema (old |dQ/dT| ~ gamma^T, new ~ gamma^T (1-gamma),
+# per agent, for every T and state), so this keeps the Boltzmann selection where
+# 0.05 had it: measured median gap 0.347 today, decisive (>0.9) in 80% of
+# decisions.  Left at 0.05 the new median gap (~0.0035) gives p ~ 0.52, a coin
+# flip at every decision.  Balance/transport still run the legacy schema and pin
+# 0.05 in their overlays.
+temperature: 0.0005
 
 # Size of the critic ensemble. All members are trained; the arbiter samples 2 at
 # random and takes their min as a pessimistic Q-estimate. Set to 1 to disable the
@@ -67,3 +75,18 @@ eval_rl_only: true
 # random 2.  min_pair uses a fixed pair instead, reproducing the training-time
 # operator's subset size exactly while staying deterministic.
 eval_critic_reduction: min_all
+
+# --- Gated imitation term (actor regulariser) ----------------------------
+# Off by default: with mode `none` the actor loss is the plain MADDPG term
+# and no new code runs.  `gated` adds alpha * mean|Q_tot| * gate(o) *
+# ||pi_theta(o) - pi_teacher(o)||^2 to the actor loss, where gate(o) is the
+# arbiter's preference for the teacher's proposal at o (two pure joint
+# candidates scored by the target ensemble exactly as at execution).
+# `uniform` holds the gate open (the RFT-like control).  alpha is in units
+# of the minibatch mean |Q_tot| (TD3+BC-style), so it transfers across
+# tasks with different return scales.
+actor_reg:
+  mode: none        # none | gated | uniform
+  alpha: 0.4        # 0.4 == TD3+BC's default ratio in this parametrisation
+  gate: soft        # soft (Boltzmann at `temperature`) | hard (indicator)
+  temperature: 0.0005 # soft-gate temperature; the arbiter's own (rescaled with it, see above)

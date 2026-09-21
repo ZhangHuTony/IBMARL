@@ -87,6 +87,16 @@ class MaddpgExperiment(BaseMARLExperiment):
 
             policies[group] = policy
         
+        # Read from the same `exploration_noise` block IBMARL reads
+        # (ibmarl/modules.py).  The values were hard-coded here at 0.1/0.1,
+        # numerically identical to ibmarl.yaml's defaults, so nothing changes
+        # today -- but a sigma sweep (paper_run --sigma-init/--sigma-end, or an
+        # edit to the yaml) moved IBMARL's exploration and silently left every
+        # baseline behind at 0.1.  Same source, same schedule, one knob.
+        noise_config = cfg.get('exploration_noise') or {}
+        sigma_init = noise_config.get('sigma_init', 0.1)
+        sigma_end = noise_config.get('sigma_end', 0.1)
+
         exploration_policies = {}
         for group, _agents in env.group_map.items():
             exploration_policy = TensorDictSequential(
@@ -97,8 +107,8 @@ class MaddpgExperiment(BaseMARLExperiment):
                         "exploration_annealing_frames", cfg.get("total_frames") // 2
                     ),
                     action_key= (group, "action"),
-                    sigma_init = 0.1,
-                    sigma_end = 0.1,
+                    sigma_init = sigma_init,
+                    sigma_end = sigma_end,
                 )
             )
             exploration_policies[group] = exploration_policy
@@ -234,7 +244,7 @@ class MaddpgExperiment(BaseMARLExperiment):
             # skipped by MetricsLogger.log and dropped by the analysis scripts) ---
             eval_means = None
             if self.should_evaluate(iteration):
-                eval_means = self.evaluate(n_episodes=20)
+                eval_means = self.evaluate_at_iteration(iteration, n_episodes=20)
 
             # --- Metrics ---
             elapsed = elapsed_offset + (time.time() - start_time)
@@ -347,10 +357,18 @@ class MaddpgExperiment(BaseMARLExperiment):
         losses = {}
 
         for group, _agents in self.env.group_map.items():
+            # delay_actor: the TD target's next action comes from a Polyak
+            # target actor, as in the original DDPG/MADDPG and as IBMARL's
+            # bootstrap already does (arbiter.py uses target_rl_policies).
+            # torchrl's default is False (online actor), which buzzwire4's
+            # baselines ran with: every MADDPG/RLfD/RFT seed that collapsed did
+            # so with Q climbing past the binary schema's ceiling of 1.  RLfD
+            # and RFT inherit this method, so the change covers all three.
             loss_module = DDPGLoss(
                 actor_network = self.policies[group],
                 value_network = self.critics[group],
                 delay_value = True,
+                delay_actor = True,
             )
             loss_module.set_keys(
                 state_action_value = (group, "state_action_value"),

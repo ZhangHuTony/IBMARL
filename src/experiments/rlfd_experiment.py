@@ -13,99 +13,20 @@ are identical to MADDPG.
 """
 
 from copy import deepcopy
-from pathlib import Path
 from typing import Dict
 import time
 
-import numpy as np
 import torch
 
 from tensordict import TensorDict, TensorDictBase
 
 from torchrl.data import LazyMemmapStorage, RandomSampler, ReplayBuffer
 
+from src.util.demonstrations import load_demonstrations_into_buffer
+from src.util.paths import resolve_path
+
 from src.experiments.base_marl_experiment import BaseMARLExperiment
 from src.experiments.maddpg import MaddpgExperiment
-
-
-def _load_demonstrations_into_buffer(
-    demonstration_path: Path, group: str, replay_buffer: ReplayBuffer
-) -> None:
-    """
-    Load demonstrations into the given replay buffer, matching the
-    [Batch, Agents, *] structure of the live collector (same as MADDPG batches).
-    """
-    if not demonstration_path or not demonstration_path.exists():
-        raise FileNotFoundError(f"Demonstrations not found at {demonstration_path}")
-
-    print(f"[RLfD] Loading demonstrations for group '{group}' from {demonstration_path}")
-    demo_data = torch.load(
-        demonstration_path, map_location="cpu", weights_only=False
-    )
-
-    obs = torch.tensor(np.array(demo_data["obs"]), dtype=torch.float32)
-    act = torch.tensor(np.array(demo_data["act"]), dtype=torch.float32)
-    rew = torch.tensor(np.array(demo_data["rewards"]), dtype=torch.float32)
-    next_obs = torch.tensor(np.array(demo_data["next_obs"]), dtype=torch.float32)
-    dones = torch.tensor(np.array(demo_data["dones"]), dtype=torch.bool)
-
-    if rew.ndim == 2:
-        rew = rew.unsqueeze(-1)
-
-    total_elements = obs.shape[0]
-    n_agents = obs.shape[1]
-
-    # Episode ends in the demos come from the recorder's time limit, not true
-    # termination, so bootstrap through them: done=True, terminated=False.
-    done_agent = dones.view(-1, 1, 1).expand(total_elements, n_agents, 1)
-    terminated_agent = torch.zeros((total_elements, n_agents, 1), dtype=torch.bool)
-
-    agents_data = TensorDict(
-        {
-            "observation": obs,
-            "action": act,
-            "episode_reward": rew,
-        },
-        batch_size=[total_elements, n_agents],
-    )
-
-    # Built fresh rather than cloned from agents_data: cloning silently carried
-    # the CURRENT observation into the next slot, making every demo transition a
-    # self-transition and poisoning the TD target.
-    next_agents_data = TensorDict(
-        {
-            "observation": next_obs,
-            "episode_reward": rew.clone(),
-            "done": done_agent.clone(),
-            "terminated": terminated_agent.clone(),
-            "reward": rew.clone(),
-        },
-        batch_size=[total_elements, n_agents],
-    )
-
-    next_td = TensorDict(
-        {
-            group: next_agents_data,
-            "done": dones.view(-1, 1).clone(),
-            "terminated": torch.zeros((total_elements, 1), dtype=torch.bool),
-        },
-        batch_size=[total_elements],
-    )
-
-    td = TensorDict(
-        {
-            group: agents_data,
-            "next": next_td,
-            "done": torch.zeros((total_elements, 1), dtype=torch.bool),
-            "terminated": torch.zeros((total_elements, 1), dtype=torch.bool),
-        },
-        batch_size=[total_elements],
-    )
-
-    replay_buffer.extend(td)
-    print(
-        f"[RLfD] Loaded {total_elements} demonstration transitions into {group} buffer."
-    )
 
 
 def _build_demo_and_online_buffers(cfg, env, device) -> tuple:
@@ -113,7 +34,7 @@ def _build_demo_and_online_buffers(cfg, env, device) -> tuple:
     Build demo (pre-loaded) and online (empty) replay buffers per group.
     Same storage/sampler/batch_size as MADDPG.
     """
-    demonstration_path = Path(cfg["demonstrations_path"])
+    demonstration_path = resolve_path(cfg["demonstrations_path"])
     memory_size = cfg["memory_size"]
     train_batch_size = cfg["training"]["train_batch_size"]
 
@@ -131,7 +52,7 @@ def _build_demo_and_online_buffers(cfg, env, device) -> tuple:
                 rb.append_transform(lambda td: td.to(device))
             buffers[group] = rb
 
-        _load_demonstrations_into_buffer(demonstration_path, group, demo_buffers[group])
+        load_demonstrations_into_buffer(demonstration_path, group, demo_buffers[group], log_prefix="[RLfD]")
 
     return demo_buffers, online_buffers
 
@@ -285,7 +206,7 @@ class RlfdExperiment(MaddpgExperiment):
             # skipped by MetricsLogger.log and dropped by the analysis scripts) ---
             eval_means = None
             if self.should_evaluate(iteration):
-                eval_means = self.evaluate(n_episodes=20)
+                eval_means = self.evaluate_at_iteration(iteration, n_episodes=20)
 
             # --- Metrics ---
             elapsed = elapsed_offset + (time.time() - start_time)

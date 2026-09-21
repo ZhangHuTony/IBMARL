@@ -82,6 +82,52 @@ class ActionArbiter:
             return self._best_next_act_comb(group, next_obs)
         
 
+    def teacher_preference(self, group, obs, a_rl, temperature=None, hard=False):
+        '''
+        The *gate* of the gated imitation term: how strongly the arbiter would
+        prefer the teacher's proposal over *a_rl* at *obs*, under the same
+        scoring operator the acting and bootstrap paths use -- two pure joint
+        candidates, min over 2 randomly sampled target members, sum over
+        agents.  Returns ``(gate, q_il, q_rl)``, each ``[B]``, without gradient.
+
+        Soft: the Boltzmann probability of the teacher at *temperature* (the
+        arbiter's own when None).  Hard: the indicator ``q_il > q_rl``.
+
+        Always the two pure candidates, even when ``strict`` is False: the term
+        pulls the whole team's action toward the teacher's joint proposal,
+        mirroring the joint arbitration of IBMARL proper.  Noise-free on both
+        sides -- this scores what the two policies *are*, not what exploration
+        would execute.
+        '''
+        with torch.no_grad():
+            if obs.dim() != 3 or a_rl.dim() != 3 or obs.shape[:2] != a_rl.shape[:2]:
+                raise RuntimeError(
+                    f"teacher_preference expects obs [B,N,obs_dim] and a_rl [B,N,act_dim], "
+                    f"got {list(obs.shape)} and {list(a_rl.shape)}"
+                )
+            B = obs.shape[0]
+            a_il = self.il_policy.get_action(group, obs)
+            joint = torch.stack([a_il, a_rl], dim=0)  # [2, B, N, act_dim]
+            td = TensorDict(
+                {
+                    (group, "observation"): obs.unsqueeze(0).expand(2, B, *obs.shape[1:]),
+                    (group, "action"): joint,
+                },
+                batch_size=[2, B],
+                device=obs.device,
+            )
+            indices = self._sample_critic_indices()
+            q_subset = self._evaluate_critics(group, td, indices)   # [k, 2, B, N, 1]
+            q_min_per_agent, _ = torch.min(q_subset, dim=0)         # [2, B, N, 1]
+            q_tot = q_min_per_agent.sum(dim=2).squeeze(-1)          # [2, B]
+            q_il, q_rl = q_tot[0], q_tot[1]
+            if hard:
+                gate = (q_il > q_rl).float()
+            else:
+                temp = self.temperature if temperature is None else temperature
+                gate = torch.softmax(q_tot.permute(1, 0) / temp, dim=-1)[:, 0]
+            return gate, q_il, q_rl
+
     def _sample_critic_indices(self):
          '''
          helper to sample 2 random critics from the ensemble

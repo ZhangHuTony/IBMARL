@@ -13,6 +13,16 @@ So re-running this script after any interruption picks up where it left off.
     python -m analysis.paper_sweep --jobs 3            # launch / resume
     python -m analysis.paper_sweep --status            # progress only
     python -m analysis.paper_sweep --dry-run
+
+Smoke-testing a plan before committing GPU-days to it: use a throwaway --tag
+(so nothing real is resumed into), --max-seeds 1, and enough --n-iters to get
+PAST the warm-up, or the IBMARL variants never take a gradient step and the
+training path goes untested.  On buzz_wire warm-up ends once the buffer
+reaches ibmarl_min_warm_up_frames (40k); with the 1,698 demo transitions
+pre-loaded and 8k frames/iteration that is 1698 + 8000(k+1) >= 40000, so
+iterations 0-3 are warm-up and iteration 4 is the first to train.  --n-iters 5
+is the minimum that trains at all; 7 gives three training iterations, which is
+what makes an eval land outside warm-up too (eval_interval 4).
 """
 
 from __future__ import annotations
@@ -32,28 +42,62 @@ RESULTS_ROOT = Path("results")
 MAIN_SEEDS = [0, 1, 2, 3, 4]
 ABLATION_SEEDS = [0, 1, 2]
 
+# The paper-3 final plan: 5 seeds for the main comparison (ibmarl_strict is the
+# paper's IBMARL) plus the per-agent-mixing ablation, 3 seeds for the strict
+# one-factor ablations. The old mixing-base ablations (ibmarl_hard,
+# ibmarl_1critic) are not in the paper and were dropped. NOTE: the paper3
+# navigation sweep on disk was produced by an earlier JOBS table plus follow-up
+# --only invocations; do not re-run --tag paper3 with this table.
 JOBS: list[tuple[str, list[int]]] = [
     # IL reference line: no training, seconds per seed. Runs first so the
     # reference number exists on disk before any learning curve does.
     ("bc_eval", ABLATION_SEEDS),
+    ("ibmarl_strict", MAIN_SEEDS),
     ("ibmarl", MAIN_SEEDS),
     ("maddpg", MAIN_SEEDS),
     ("rlfd", MAIN_SEEDS),
     ("rft", MAIN_SEEDS),
-    ("ibmarl_strict", ABLATION_SEEDS),
-    ("ibmarl_hard", ABLATION_SEEDS),
-    ("ibmarl_1critic", ABLATION_SEEDS),
+    ("ibmarl_strict_hard", ABLATION_SEEDS),
+    ("ibmarl_strict_1critic", ABLATION_SEEDS),
 ]
 
 
 def job_list(
-    only: list[str] | None, max_seeds: int | None = None
+    only: list[str] | None, max_seeds: int | None = None,
+    seeds: list[int] | None = None,
 ) -> list[tuple[str, int]]:
+    """
+    (variant, seed) pairs to run.  Without --only, the JOBS table.  With
+    --only, the named variants: those in JOBS keep their seed list, and any
+    other name registered in paper_run.VARIANTS (an ad-hoc experiment that
+    should not join the default sweep, e.g. the gated-imitation variants) gets
+    MAIN_SEEDS.  A name registered nowhere is an error rather than a silent
+    no-op, which is how a mistyped --only used to run zero jobs.
+
+    An explicit ``seeds`` list replaces every variant's seed list outright
+    (so it also reaches the 5-seed HPC sweeps for bc_eval, whose table entry
+    is 3 seeds); ``max_seeds`` then caps that list.  slurm/run_sweep.slurm
+    runs one seed GROUP per array task this way.
+    """
+    from analysis.paper_run import VARIANTS
+
+    table = list(JOBS)
+    if only:
+        in_table = {v for v, _ in JOBS}
+        for name in only:
+            if name in in_table:
+                continue
+            if name not in VARIANTS:
+                raise SystemExit(
+                    f"--only: unknown variant {name!r} (not in JOBS or paper_run.VARIANTS)"
+                )
+            table.append((name, MAIN_SEEDS))
     jobs = []
-    for variant, seeds in JOBS:
+    for variant, variant_seeds in table:
         if only and variant not in only:
             continue
-        for seed in seeds[:max_seeds] if max_seeds else seeds:
+        chosen = list(seeds) if seeds is not None else variant_seeds
+        for seed in chosen[:max_seeds] if max_seeds else chosen:
             jobs.append((variant, seed))
     return jobs
 
@@ -89,8 +133,9 @@ def resume_iteration(tag: str, variant: str, seed: int) -> int | None:
         return None
 
 
-def print_status(tag: str, only: list[str] | None, max_seeds: int | None = None) -> None:
-    jobs = job_list(only, max_seeds)
+def print_status(tag: str, only: list[str] | None, max_seeds: int | None = None,
+                 seeds: list[int] | None = None) -> None:
+    jobs = job_list(only, max_seeds, seeds)
     counts = {"done": 0, "partial": 0, "pending": 0}
     print(f"{'variant':<16} {'seed':>4}  {'state':<8} {'resume@':>8}")
     print("-" * 42)
@@ -112,15 +157,31 @@ def main() -> int:
     parser.add_argument("--threads", type=int, default=4, help="torch threads per run")
     parser.add_argument("--tag", default="paper")
     parser.add_argument(
+        "--scenario",
+        default="navigation",
+        help="Scenario for every job (forwarded to analysis.paper_run).",
+    )
+    parser.add_argument(
         "--n-iters",
         type=int,
         default=None,
         help="Override n_iters. Default: leave it to config/base.yaml.",
     )
+    parser.add_argument(
+        "--n-opt-steps",
+        type=int,
+        default=None,
+        help="Override training.n_optimiser_steps (smoke tests).  Needed to "
+             "smoke-test buzz_wire, whose 2000 steps/iteration dominate the "
+             "wall time long before the code under test has been reached.",
+    )
     parser.add_argument("--resume-interval", type=int, default=25)
     parser.add_argument("--only", default=None, help="comma-separated variants")
     parser.add_argument("--max-seeds", type=int, default=None,
                         help="Cap seeds per variant (smoke tests).")
+    parser.add_argument("--seeds", default=None,
+                        help="Comma-separated seeds to run for every selected variant, "
+                             "replacing the JOBS table's seed lists (e.g. 3,4).")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--status", action="store_true", help="print progress and exit")
     parser.add_argument(
@@ -129,12 +190,13 @@ def main() -> int:
     args = parser.parse_args()
 
     only = args.only.split(",") if args.only else None
+    seeds = [int(s) for s in args.seeds.split(",") if s.strip()] if args.seeds else None
 
     if args.status:
-        print_status(args.tag, only, args.max_seeds)
+        print_status(args.tag, only, args.max_seeds, seeds)
         return 0
 
-    jobs = job_list(only, args.max_seeds)
+    jobs = job_list(only, args.max_seeds, seeds)
     todo = [
         (v, s)
         for v, s in jobs
@@ -189,11 +251,14 @@ def main() -> int:
                 "analysis.paper_run",
                 "--variant", variant,
                 "--seed", str(seed),
+                "--scenario", args.scenario,
                 "--tag", args.tag,
                 "--resume-interval", str(args.resume_interval),
             ]
             if args.n_iters is not None:
                 cmd += ["--n-iters", str(args.n_iters)]
+            if args.n_opt_steps is not None:
+                cmd += ["--n-opt-steps", str(args.n_opt_steps)]
             fh = open(log_path, "a")
             fh.write(f"\n===== launch {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
             fh.flush()
@@ -234,7 +299,7 @@ def main() -> int:
     if interrupted:
         print("[sweep] interrupted -- re-run to resume.")
         return 130
-    print_status(args.tag, only, args.max_seeds)
+    print_status(args.tag, only, args.max_seeds, seeds)
     return 0 if n_ok == len(completed) else 1
 
 

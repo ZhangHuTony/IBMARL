@@ -21,6 +21,9 @@ ENV/
 *.pt
 *.pth
 *.ckpt
+# Bundled teacher artifacts are the one exception (see teachers/README.md).
+!teachers/**/*.pt
+!teachers/**/*.pth
 
 # --------------------
 # Logs & outputs
@@ -29,6 +32,10 @@ logs/
 runs/
 wandb/
 *.csv
+# The data tables behind the committed figures are the exception: `results/` is
+# ignored wholesale just below, so the blanket rule above is not what keeps
+# per-run metrics.csv out, and without this it silently drops them too.
+!analysis/figures/**/*.csv
 *.mp4
 
 # --------------------
@@ -43,6 +50,7 @@ results/
 Thumbs.db
 .idea/
 .vscode/
+.claude/scheduled_tasks.lock
 
 # --------------------
 # Build artifacts

@@ -1,0 +1,4 @@
+variant,n_seeds,n_reached,steps_to_teacher_median,steps_to_teacher_median_reaching,capped_at_budget,final_return_mean,final_return_sd
+ibmarl_strict,5,5,58000.0,58000.0,False,-20.31942138671875,0.5584654648075112
+maddpg,2,1,190000.0,179000.0,True,-59.48453712463379,18.042952826524772
+ibmarl,5,5,43000.0,43000.0,False,-20.473392257690428,1.6788492262318138

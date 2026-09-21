@@ -1,9 +1,17 @@
-torchrl==0.10.0
-tensordict
-vmas
+# Pinned to the environment every result on disk was produced under
+# (verified 2026-09-20).  The scenario subclasses in
+# src/environment/scenarios/ reach into VMAS internals (reset_world_at,
+# goal.shape.radius) and make_env depends on how torchrl's VmasEnv maps
+# vmas' merged done onto terminated/truncated, so vmas and torchrl in
+# particular are not safe to float.
+torch==2.9.1
+torchvision==0.24.1
+torchrl==0.10.1
+tensordict==0.10.0
+vmas==1.5.2
+numpy==2.2.6
 pettingzoo[mpe]==1.24.3
-tqdm
-matplotlib
-torchvision
-pyyaml
-imageio[ffmpeg]
+matplotlib==3.10.8
+pyyaml==6.0.3
+imageio[ffmpeg]==2.37.4
+tqdm==4.67.1

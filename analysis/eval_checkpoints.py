@@ -110,8 +110,9 @@ def _build_ibmarl_eval_policies(cfg: dict, run_dir: Path, env, device, rl_polici
     arbiter scores with, and the frozen teacher it scores against.  Either can
     be absent -- runs predating the protocol change have no
     ``critic_checkpoint.pt``, and older configs carry absolute teacher paths from
-    a machine or a directory layout that no longer exists -- so both are checked
-    and a miss is a warning, not a failure.
+    a machine or a directory layout that no longer exists (newer ones are
+    repo-relative, ``teachers/<task>/...``, and resolve against this checkout)
+    -- so both are checked and a miss is a warning, not a failure.
     """
     from src.experiments.ibmarl.arbiter import ActionArbiter
     from src.experiments.ibmarl.modules import build_eval_policies
@@ -126,7 +127,7 @@ def _build_ibmarl_eval_policies(cfg: dict, run_dir: Path, env, device, rl_polici
         print(f"  skip rl_il for {run_dir}: no critic_checkpoint.pt")
         return None
 
-    teacher_path = Path(cfg.get("r2bc_checkpoint_path", ""))
+    teacher_path = resolve_path(cfg.get("r2bc_checkpoint_path", ""))
     if not teacher_path.is_file():
         print(f"  skip rl_il for {run_dir}: teacher not readable at {teacher_path}")
         return None

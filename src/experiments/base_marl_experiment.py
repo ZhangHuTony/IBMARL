@@ -43,34 +43,36 @@ def vmas_rng_guard():
     training and its cost in perturbation does not scale with how many protocols
     are measured.
 
-    For the newer implementation the restore must be an in-place slice
-    assignment: ``local_seed`` closed over the list object at class-definition
-    time, so rebinding the attribute would not be seen.
+    The restore must be an in-place slice assignment: ``local_seed`` closed over
+    the list object at class-definition time, so rebinding the attribute would
+    not be seen.
+
+    The CUDA generator has to be restored here as well, and it is the reason the
+    guard did not originally deliver what this docstring promises.  ``vmas``'s
+    ``local_seed`` saves and restores the global *CPU* streams (torch, numpy,
+    random) around each decorated call, and this function covers the class-level
+    ``vmas_random_state`` -- but nothing covered ``torch.cuda``.  On a GPU run the
+    simulator draws from the CUDA generator, so an evaluation rollout advanced it
+    and the collector's next ``AdditiveGaussianModule`` sample (also on device)
+    came out different: evaluating changed what was subsequently trained on,
+    exactly the leak the guard exists to close.  Measured on maddpg/transport,
+    seed 0: identical training returns for two runs at the same eval schedule,
+    but a divergence from iteration 2 between eval-every-iteration and
+    eval-never.  Restoring all devices' states closes it.
     """
     from vmas.simulator.environment.environment import Environment
 
-    state = getattr(Environment, "vmas_random_state", None)
-    if state is not None:
-        snapshot = [state[0].clone(), state[1], state[2]]
-        try:
-            yield
-        finally:
-            state[:] = snapshot
-        return
-
-    # VMAS 1.4.x seeds and consumes the process-wide generators directly.
-    torch_state = torch.get_rng_state()
-    cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
-    numpy_state = np.random.get_state()
-    python_state = random.getstate()
+    state = Environment.vmas_random_state
+    snapshot = [state[0].clone(), state[1], state[2]]
+    cuda_snapshot = (
+        torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    )
     try:
         yield
     finally:
-        torch.set_rng_state(torch_state)
-        if cuda_states is not None:
-            torch.cuda.set_rng_state_all(cuda_states)
-        np.random.set_state(numpy_state)
-        random.setstate(python_state)
+        state[:] = snapshot
+        if cuda_snapshot is not None:
+            torch.cuda.set_rng_state_all(cuda_snapshot)
 
 
 class BaseMARLExperiment(ResumeMixin):
@@ -116,6 +118,17 @@ class BaseMARLExperiment(ResumeMixin):
         if self._eval_env is None:
             eval_config = dict(self.config)
             eval_config["seed"] = self.config.get("seed", 0) + 10_000
+            # `eval_episodes` (config/environments/<task>.yaml) sizes THIS env's
+            # batch so one rollout yields that many episodes.  make_env derives
+            # the batch as frames_per_batch // horizon, so it is expressed through
+            # frames_per_batch on the eval copy only -- the collector's env is
+            # untouched.  A wider batch is the cheap way to more episodes: VMAS is
+            # launch-bound on the GPU, so 200 sub-envs step in about the time 40
+            # do, where 5 rollouts of 40 would cost 5x.  Absent, the eval env
+            # mirrors the training batch as before.
+            n_eval = eval_config.get("eval_episodes")
+            if n_eval:
+                eval_config["frames_per_batch"] = int(n_eval) * int(eval_config.get("horizon", 100))
             self._eval_env = make_env(eval_config, self.device)
         return self._eval_env
 
@@ -155,6 +168,33 @@ class BaseMARLExperiment(ResumeMixin):
             done = done.unsqueeze(-2).expand(*done.shape[:-1], n_agents, 1)
         return done
 
+    def _completed_episode_returns(self, out, group: str) -> torch.Tensor:
+        """
+        Per-agent returns of the episodes that finished inside one
+        ``env.rollout`` output, flattened to 1-D.
+
+        Under ``binary_terminal_reward`` episodes end early on success, so a
+        sub-env that succeeds quickly auto-resets and can complete two or three
+        episodes in one rollout, over-weighting the fast ones if every ended
+        episode were counted.  Only the FIRST completed episode per sub-env is
+        taken: ``rollout`` resets first and the StepCounter truncates at exactly
+        ``horizon``, so every sub-env completes exactly one episode within a
+        horizon-length rollout, which keeps the caller's "one episode per
+        sub-env per rollout" arithmetic exact.
+
+        Gated on the flag because it is not a no-op elsewhere: balance already
+        terminates early (measured 1.06 dones per sub-env per rollout) and its
+        numbers must not move.
+        """
+        ep_reward = out.get(("next", group, "episode_reward"))  # [n_envs, T, n_agents, 1]
+        if self.config.get("binary_terminal_reward", False):
+            done_t = out.get(("next", "done")).squeeze(-1)  # [n_envs, T]
+            first_t = done_t.int().argmax(dim=1)
+            envs = torch.nonzero(done_t.any(dim=1), as_tuple=True)[0]
+            return ep_reward[envs, first_t[envs]].reshape(-1).float()
+        done = self._agent_done_mask(out, group, ep_reward)
+        return ep_reward[done].float()
+
     def should_evaluate(self, iteration: int) -> bool:
         """
         Whether the (0-based) *iteration* about to be logged should run a
@@ -189,6 +229,28 @@ class BaseMARLExperiment(ResumeMixin):
         ``vmas_rng_guard``, which contains the reseed.
         """
         self.eval_env.set_seed(int(seed))
+
+    def evaluate_at_iteration(self, iteration: int, n_episodes: int = 20, **kwargs) -> dict:
+        """
+        ``evaluate`` on a *pinned, side-effect-free* episode set for *iteration*.
+
+        Every VMAS environment in the process shares one RNG stream (see
+        ``vmas_rng_guard``), so an unguarded evaluation rollout shifts the
+        resets the collector subsequently draws: measuring a baseline perturbs
+        the very training data it is measuring.  IBMARL has always run its two
+        protocols inside the guard with the eval env pinned to
+        ``seed + 10_000 + iteration``; the baselines called ``evaluate``
+        bare, which left them exposed to that feedback AND measured them on a
+        different set of episodes than IBMARL saw at the same iteration.
+
+        Routing every learner through this helper makes the comparison paired:
+        at a given (seed, iteration) all variants are scored on identical
+        initial conditions, and none of them can evaluate its way into
+        different training data.
+        """
+        with vmas_rng_guard():
+            self.reseed_eval_env(self.config.get("seed", 0) + 10_000 + iteration)
+            return self.evaluate(n_episodes=n_episodes, **kwargs)
 
     def evaluate(
         self,
@@ -237,22 +299,23 @@ class BaseMARLExperiment(ResumeMixin):
         with torch.no_grad():
             with set_exploration_type(ExplorationType.MODE):
                 for _ in range(n_rollouts):
-                    # break_when_any_done=False is required for correctness, not
-                    # just completeness.  The default stops the rollout at the
-                    # FIRST sub-env to finish, and only episodes that have ended
-                    # are counted below -- so a policy that solves the task has
-                    # its slower episodes systematically discarded and scores
-                    # too well.  Measured on ibmarl/seed_0: -19.42 from 87 of
-                    # 630 agent-episodes, versus -21.46 from all 630.  It also
-                    # restores the n_rollouts arithmetic, which assumes each
-                    # rollout yields one episode per sub-env.
+                    # break_when_any_done=False so every sub-env gets its full
+                    # horizon.  The default stops the rollout at the FIRST
+                    # sub-env to finish, and only episodes that have ended are
+                    # counted -- so a policy that solves the task has its
+                    # slower episodes systematically discarded and scores too
+                    # well.  Measured on ibmarl/seed_0: -19.42 from 87 of 630
+                    # agent-episodes, versus -21.46 from all 630.  Which of the
+                    # ended episodes count is _completed_episode_returns'
+                    # business; it is what keeps the n_rollouts arithmetic
+                    # (one episode per sub-env per rollout) exact.
                     out = env.rollout(
                         horizon, policy=eval_policy, break_when_any_done=False
                     )
                     for group in env.group_map.keys():
-                        ep_reward = out.get(("next", group, "episode_reward"))
-                        done = self._agent_done_mask(out, group, ep_reward)
-                        returns[group].append(ep_reward[done].float())
+                        returns[group].append(
+                            self._completed_episode_returns(out, group)
+                        )
                         for key in extra_keys:
                             # Averaged over every executed step, not only the
                             # ones ending an episode: with

@@ -21,6 +21,7 @@ from src.experiments.ibmarl.networks import R2bcPolicy, build_rl_policies, build
 from src.experiments.ibmarl.losses import GroupTrainer
 from src.experiments.ibmarl.arbiter import ActionArbiter
 from src.experiments.ibmarl.modules import build_eval_policies, build_il_noise_modules
+from src.util.paths import resolve_path
 from src.experiments.ibmarl.data import (
     build_data_collector,
     build_single_replay_buffer,
@@ -32,7 +33,7 @@ class IbmarlExperiment(BaseMARLExperiment):
     def __init__(self, config):
         super().__init__(config)
 
-        bc_path = Path(config["r2bc_checkpoint_path"])
+        bc_path = resolve_path(config["r2bc_checkpoint_path"])
         self.il_policies = R2bcPolicy(bc_path, self.env, self.device)
 
         self.rl_policies = build_rl_policies(config, self.env, self.device)
@@ -219,6 +220,9 @@ class IbmarlExperiment(BaseMARLExperiment):
             # --- Training (skipped during warm-up) ---
             actor_losses = {group: [] for group in self.env.group_map.keys()}
             critic_losses = {group: [] for group in self.env.group_map.keys()}
+            # Gated imitation term diagnostics; stay empty when actor_reg is off.
+            reg_mses = {group: [] for group in self.env.group_map.keys()}
+            gate_means = {group: [] for group in self.env.group_map.keys()}
 
             if not is_warm_up:
                 for group in train_group_map.keys():
@@ -232,6 +236,9 @@ class IbmarlExperiment(BaseMARLExperiment):
 
                         critic_losses[group].append(critic_info["critic_loss"])
                         actor_losses[group].append(actor_info["actor_loss"])
+                        if actor_info.get("reg_mse") is not None:
+                            reg_mses[group].append(actor_info["reg_mse"])
+                            gate_means[group].append(actor_info["gate_mean"])
 
                         self.trainer.polyak_step(
                             self.critics[group], self.target_critics[group]
@@ -316,6 +323,17 @@ class IbmarlExperiment(BaseMARLExperiment):
                     eval_reward_mean=eval_val,
                     actor_loss=round(sum(actor_losses[group]) / n_opt, 6) if actor_losses[group] else None,
                     critic_loss=round(sum(critic_losses[group]) / n_opt, 6) if critic_losses[group] else None,
+                    # Gated imitation term (actor_reg): mean squared distance of
+                    # the actor to the teacher and the mean gate over the
+                    # iteration's minibatches.  None (empty cell) when off.
+                    reg_mse=(
+                        round(sum(reg_mses[group]) / len(reg_mses[group]), 6)
+                        if reg_mses[group] else None
+                    ),
+                    gate_mean=(
+                        round(sum(gate_means[group]) / len(gate_means[group]), 4)
+                        if gate_means[group] else None
+                    ),
                     replay_size=len(self.replay_buffers[group]),
                     rl_action_fraction=round(arbiter_metrics[group]["rl_action_fraction"], 4),
                     rl_only_episode_reward_mean=rl_only_val,

@@ -13,10 +13,20 @@ def build_transforms(config: dict):
     sparse_rewards = config.get("sparse_rewards", False)
 
     transforms = []
-    # Balance and buzz_wire use scenario-level sparse rewards because their
-    # exact native goal predicates require simulator state.
+    transform_repr = []
 
-    if scenario == "navigation" and sparse_rewards:
+    # NOTE: buzz_wire's sparse reward is NOT a transform - the ball position it
+    # needs is absent from the observation, so it lives at scenario level
+    # (src/environment/scenarios/buzz_wire_sparse.py via resolve_scenario in
+    # make_env.py); buzz_wire intentionally has no branch here.  Navigation
+    # under binary_terminal_reward likewise moves to scenario level
+    # (scenarios/navigation_terminal.py): a transform cannot make the episode
+    # end where the reward is paid.  This transform is its legacy -1/step
+    # variant, still selected when the flag is off.
+    binary = bool(config.get("binary_terminal_reward", False))
+
+    if scenario == "navigation" and sparse_rewards and not binary:
+        transform_repr.append("NavigationSparseReward")
         transforms.append(
             NavigationSparseReward(
                 group="agents",

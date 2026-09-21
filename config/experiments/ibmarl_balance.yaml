@@ -1,6 +1,6 @@
 # Balance-specific overlay for IBMARL.
 # Merged on top of config/experiments/ibmarl.yaml by load_config, so everything not
-# named here (strict/soft/temperature/num_critics/exploration_noise) keeps its default.
+# named here (strict/soft/num_critics/exploration_noise) keeps its default.
 
 # R2BC teacher distilled from a MAPPO supervisor: 36 demonstrations, 10,800 transitions,
 # dense rewards.  Deliberately sub-optimal budget -- R2BC's own balance.yaml notes ~-220
@@ -24,3 +24,10 @@ ibmarl_replay_size: 1000000
 #  * 'dones' is a balance-success flag, not a terminal flag (True mid-episode, never at the
 #    horizon-300 boundaries).  It cannot reach the TD target: losses.py reads
 #    ("next", group, "terminated"), which the loader sets to all-zeros.
+
+# This task still runs the legacy -1/step sparse schema (no binary_terminal_reward
+# in its environment yaml), so the arbiter temperature stays at the value the
+# legacy Q-scale was tuned for; ibmarl.yaml's default is rescaled for the binary
+# tasks.  actor_reg keeps ibmarl.yaml's block (mode: none), so its gate
+# temperature is moot here; a gated variant on this task would need it re-pinned.
+temperature: 0.05
