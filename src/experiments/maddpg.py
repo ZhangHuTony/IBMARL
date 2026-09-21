@@ -103,7 +103,9 @@ class MaddpgExperiment(BaseMARLExperiment):
                 policies[group],
                 AdditiveGaussianModule(
                     spec = policies[group].spec,
-                    annealing_num_steps= cfg.get('total_frames') // 2,
+                    annealing_num_steps=cfg.get(
+                        "exploration_annealing_frames", cfg.get("total_frames") // 2
+                    ),
                     action_key= (group, "action"),
                     sigma_init = sigma_init,
                     sigma_end = sigma_end,
@@ -190,6 +192,7 @@ class MaddpgExperiment(BaseMARLExperiment):
 
         start_time = time.time()
         elapsed_offset = counters["elapsed"]
+        elapsed = elapsed_offset
         total_frames = counters["total_frames"]
         total_episodes = counters["total_episodes"]
         total_train_steps = counters["total_train_steps"]
@@ -301,7 +304,15 @@ class MaddpgExperiment(BaseMARLExperiment):
             pbar.update()
 
         self.metrics_logger.save()
-        self.clear_resume()
+        self.save_final_resume(
+            int(self.config["n_iters"]) - 1,
+            {
+                "total_frames": total_frames,
+                "total_episodes": total_episodes,
+                "total_train_steps": total_train_steps,
+                "elapsed": elapsed,
+            },
+        )
 
         first_group = list(self.env.group_map.keys())[0]
         recent = self.metrics_logger.get_values("episode_reward_mean", first_group)[-10:]
@@ -321,6 +332,9 @@ class MaddpgExperiment(BaseMARLExperiment):
             frames_per_batch=self.config.get('frames_per_batch'),
             device=self.device,
             total_frames=self.config.get('total_frames'),
+            # Resume checkpoints are batch-boundary snapshots. Resetting here
+            # makes the next batch reproducible from restored RNG state alone.
+            reset_at_each_iter=True,
         )
 
         return agents_exploration_policy, collector

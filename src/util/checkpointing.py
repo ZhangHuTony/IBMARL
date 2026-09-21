@@ -1,26 +1,29 @@
 """
 Mid-run checkpoint / resume support.
 
-A long sweep can be interrupted (reboot, machine needed elsewhere, Ctrl-C).
-Every experiment periodically writes a *resume state* into
+A long sweep can be interrupted (reboot, machine needed elsewhere, Ctrl-C), or
+extended after its originally configured final iteration.  Every experiment
+periodically writes a *resume state* into
 ``<check_dir>/resume/`` holding everything needed to continue:
 
     state.pt        iteration, counters, RNG states, module/optimiser state dicts
     buffer_<name>/  a TorchRL ReplayBuffer dump per buffer
 
 On the next launch the experiment reloads that state and continues from the
-next iteration instead of starting over.  The resume state is deleted once a
-run finishes normally, so only in-flight runs occupy disk.
+next iteration instead of starting over.  The latest state is intentionally
+retained after a run finishes so that a completed run can later be extended.
 
-What is *not* restored is the collector's environment state: the resume point
-is a batch boundary, and with ``frames_per_batch == horizon * num_envs`` each
-batch is a whole episode per sub-environment, so a fresh collector starting at
-a reset is distributionally equivalent.  Networks, optimisers, target networks,
-replay buffers, exploration-noise schedules and RNG streams are all preserved.
+The collectors use ``reset_at_each_iter=True``, so every checkpoint boundary is
+also an environment reset boundary.  The next batch can therefore be recreated
+from the restored RNG state without serializing VMAS's private world objects.
+Networks, optimisers, target networks, replay buffers, exploration-noise
+schedules and RNG streams are all preserved.
 """
 
 from __future__ import annotations
 
+import copy
+import random
 import shutil
 from pathlib import Path
 from typing import Any, Dict
@@ -74,8 +77,12 @@ class ResumeMixin:
             buf.dumps(buf_dir)
 
         state = {
+            "format_version": 2,
             "iteration": int(iteration),
             "counters": dict(counters),
+            # This makes the checkpoint independently inspectable and permits
+            # compatibility checks even if config.yaml is accidentally edited.
+            "config": copy.deepcopy(self.config),
             "modules": {
                 name: obj.state_dict() for name, obj in self._resume_modules().items()
             },
@@ -85,6 +92,8 @@ class ResumeMixin:
                     torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
                 ),
                 "numpy": np.random.get_state(),
+                "python": random.getstate(),
+                "vmas": self._get_vmas_rng_state(),
             },
             "metrics_rows": self.metrics_logger.rows,
             "metrics_columns": self.metrics_logger.columns,
@@ -109,6 +118,32 @@ class ResumeMixin:
         if old_dir.exists():
             shutil.rmtree(old_dir)
         print(f"[resume] saved at iteration {iteration} -> {self.resume_dir}")
+
+    @staticmethod
+    def _get_vmas_rng_state():
+        """Copy VMAS's process-shared RNG stream, when that API is present."""
+        try:
+            from vmas.simulator.environment.environment import Environment
+
+            state = getattr(Environment, "vmas_random_state", None)
+            return copy.deepcopy(state) if state is not None else None
+        except (ImportError, AttributeError):
+            return None
+
+    @staticmethod
+    def _set_vmas_rng_state(saved_state) -> None:
+        if saved_state is None:
+            return
+        try:
+            from vmas.simulator.environment.environment import Environment
+
+            current = getattr(Environment, "vmas_random_state", None)
+            if current is not None:
+                # VMAS's local_seed decorator closes over this list object, so
+                # it must be updated in place rather than rebound.
+                current[:] = copy.deepcopy(saved_state)
+        except (ImportError, AttributeError):
+            pass
 
     def load_resume(self) -> int:
         """
@@ -148,6 +183,8 @@ class ResumeMixin:
             torch.set_rng_state(rng["torch"].cpu())
         if rng.get("numpy") is not None:
             np.random.set_state(rng["numpy"])
+        if rng.get("python") is not None:
+            random.setstate(rng["python"])
         if torch.cuda.is_available() and rng.get("torch_cuda") is not None:
             try:
                 # state.pt is loaded with map_location=self.device, which puts
@@ -158,6 +195,7 @@ class ResumeMixin:
                 )
             except Exception as e:  # differing device count between runs
                 print(f"[resume] could not restore CUDA RNG state: {e}")
+        self._set_vmas_rng_state(rng.get("vmas"))
 
         self.metrics_logger.restore(
             state.get("metrics_rows", []), state.get("metrics_columns", [])
@@ -172,7 +210,7 @@ class ResumeMixin:
         return start_iteration
 
     def clear_resume(self) -> None:
-        """Drop the resume state (called after a run completes normally)."""
+        """Explicitly drop resume data. Normal training never calls this."""
         for d in (self.resume_dir, self.resume_dir.with_name(self.resume_dir.name + ".tmp")):
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
@@ -201,3 +239,23 @@ class ResumeMixin:
                 f"frames ({remaining} iterations)"
             )
         return start_iteration, counters
+
+    def save_final_resume(
+        self, iteration: int, counters: Dict[str, Any]
+    ) -> None:
+        """Ensure the last completed iteration is persistently resumable."""
+        if iteration < 0:
+            return
+        # Avoid a second potentially large replay-buffer dump when the normal
+        # periodic checkpoint just saved this exact iteration.
+        saved_iteration = None
+        if self._resume_state_path.exists():
+            try:
+                saved = torch.load(
+                    self._resume_state_path, map_location="cpu", weights_only=False
+                )
+                saved_iteration = int(saved.get("iteration", -1))
+            except Exception:
+                pass
+        if saved_iteration != int(iteration):
+            self.save_resume(iteration, counters)

@@ -1,0 +1,6 @@
+n: 3
+horizon: 300
+expert_pth: "/home/hero/Documents/r2bc_sim_marl/r2bc_supervisors_final/balance/checkpoint_000100"
+expert_policy_type: MAPPO
+training:
+  total_demonstrations: 500

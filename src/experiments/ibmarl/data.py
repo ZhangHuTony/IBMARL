@@ -64,7 +64,12 @@ def build_data_collector(cfg, parent, rl_policies, env, device):
         exploration_policies,
         frames_per_batch=frames_per_batch,
         device=device,
-        total_frames=total_frames
+        total_frames=total_frames,
+        # A full training checkpoint is taken between collector batches. Start
+        # every batch at a reset boundary so a newly constructed collector can
+        # reproduce the next batch from the restored RNG state without needing
+        # private VMAS world-state serialization.
+        reset_at_each_iter=True,
     )
 
     # The collector must run THIS policy object, not a device-cast copy: a copy

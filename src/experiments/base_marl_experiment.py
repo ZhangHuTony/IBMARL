@@ -3,6 +3,7 @@ Base class for multi-agent reinforcement learning experiments.
 """
 
 import contextlib
+import random
 
 import torch
 from abc import abstractmethod
@@ -28,13 +29,12 @@ def vmas_rng_guard():
     Make a block of environment interaction invisible to every *other* VMAS
     environment in the process.
 
-    ``vmas.simulator.environment.Environment`` keeps ``vmas_random_state`` as a
-    single **class-level** list, and its ``local_seed`` decorator -- applied to
-    ``__init__``, ``reset``, ``reset_at``, ``step``, ``seed`` and ``render`` --
-    swaps the global torch/numpy/random state to that list, runs, then writes the
-    advanced state back.  Every ``VmasEnv`` in the process therefore draws from
-    one shared stream: the training env, the evaluation env and the rendering
-    env alike.
+    VMAS versions with ``Environment.vmas_random_state`` keep a single
+    class-level state that their ``local_seed`` decorator swaps into the global
+    torch/numpy/random generators around environment calls.  VMAS 1.4.x uses
+    those global generators directly.  In both cases every ``VmasEnv`` in the
+    process therefore draws from shared state: the training env, the evaluation
+    env and the rendering env alike.
 
     The practical consequence is that evaluation rollouts advance the stream the
     collector's ``reset_world_at`` spawns come from -- evaluating changes what is
@@ -143,6 +143,7 @@ class BaseMARLExperiment(ResumeMixin):
     def _setup_seed(self):
         self.seed = self.config.get('seed', None)
         np.random.seed(self.seed)
+        random.seed(self.seed)
         torch.manual_seed(self.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.seed)

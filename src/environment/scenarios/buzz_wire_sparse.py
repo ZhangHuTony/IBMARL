@@ -5,7 +5,7 @@ Unlike navigation/balance/transport, the sparse reward for buzz_wire cannot be
 a TorchRL transform: the success predicate is the BALL's distance to the goal,
 and the ball's position is not part of the agent observation (per-agent obs is
 [pos, vel, pos - goal]; the midpoint-of-agents proxy errs by up to the rod
-length 0.25, unusable against a 0.1 radius). Instead this subclass is passed
+length 0.25, unusable against the native 0.01 tolerance). This subclass is passed
 as a scenario *instance* to torchrl's VmasEnv (which forwards it untouched to
 vmas.make_env), computing the reward from simulator state.
 

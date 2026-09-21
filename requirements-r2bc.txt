@@ -1,0 +1,14 @@
+# Optional dependencies for learned R2BC supervisors. These pins match the
+# companion R2BC repository.
+-r requirements.txt
+numpy==1.23.5
+torch~=2.5.0
+vmas~=1.4.3
+# Ray 2.1 imports pkg_resources, which setuptools 81+ no longer provides.
+setuptools<81
+ray[rllib]==2.1.0
+imageio~=2.36.0
+cvxpylayers
+# Imported by HetGPPO while loading MAPPO/IPPO checkpoints.
+wandb~=0.18.5
+torch_geometric

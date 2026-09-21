@@ -3,7 +3,6 @@ Registry for custom environment transforms.
 '''
 
 from src.environment.transforms.navigation_sparse import NavigationSparseReward
-from src.environment.transforms.balance_sparse import BalanceSparseReward
 from src.environment.transforms.transport_sparse import TransportSparseReward
 
 def build_transforms(config: dict):
@@ -36,16 +35,7 @@ def build_transforms(config: dict):
                 rel_goal_slice=slice(4, 6), 
             )
         )
-    elif scenario == "balance" and sparse_rewards:
-        transform_repr.append("BalanceSparseReward")
-        transforms.append(
-            BalanceSparseReward(
-                group="agents",
-                success_threshold=config.get("gt_radius"),
-            )
-        )
     elif scenario == "transport" and sparse_rewards:
-        transform_repr.append("TransportSparseReward")
         transforms.append(
             TransportSparseReward(
                 group="agents",
@@ -54,5 +44,4 @@ def build_transforms(config: dict):
                 n_packages=config.get("n_packages", 1),
             )
         )
-    print("Transformations added to environment:", transform_repr) 
-    return transforms    
+    return transforms

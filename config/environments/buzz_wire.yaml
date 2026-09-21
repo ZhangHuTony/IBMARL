@@ -1,4 +1,4 @@
-# Buzz-wire environment configuration (sparse binary-terminal variant via
+# Buzz-wire environment configuration (binary sparse success variant via
 # SparseRewardBuzzWireScenario - see src/environment/scenarios/buzz_wire_sparse.py)
 
 #Inherit from the base configuration
@@ -16,35 +16,13 @@ horizon: 200
 # batch is very nearly free wall-time.
 frames_per_batch: 8000
 n_iters: 75
-# Replay capacity for EVERY method on this task.  base.yaml's 1,000,000 never
-# wraps over the 600k-frame budget, while IBMARL's ibmarl_replay_size (400k,
-# ibmarl_buzz_wire.yaml) evicts from iteration 50 -- an uncontrolled difference
-# between the arms in buzzwire4, and one that matters here: the baselines'
-# critics kept old successes in a never-evicting buffer while their actors
-# drifted, with Q climbing past the schema's hard ceiling of 1 (RLfD reached
-# 1.6) before every seed collapsed.  Same 400k window for all, so the buffer is
-# no longer a variable.  ibmarl_replay_size stays equal to this.
-memory_size: 400000
-# Evaluate every 2nd iteration (plus the final one) = 38 evals over 600k steps.
-# buzzwire4 evaluated every 4th: with a 0.775 teacher every IBMARL arm crossed
-# it within 8-16 iterations, and a 4-iteration (32k-step) cadence put three of
-# the four arms within one eval interval of each other -- unresolvable by
-# construction.  One eval is ~92 s for IBMARL's two protocols (measured from
-# buzzwire4's elapsed_time), so 19 extra evals cost ~30 min per run (~20%).
-eval_interval: 2
-# Sub-envs in the dedicated eval env, i.e. episodes per evaluation.  Without
-# this the eval env mirrors the training batch (40 sub-envs) and evaluate()'s
-# n_episodes=20 rounds up to ONE rollout = 40 episodes = +/-0.126 at 2 sigma on
-# a success rate -- the noise buzzwire4's curves are made of, and why bc_eval
-# ranked a 0.770 teacher above a 0.882 one.  200 gives +/-0.057.  It is a wider
-# batch, not more rollouts: the GPU is launch-bound (see frames_per_batch), so
-# 200 sub-envs step in about the time 40 do.  Read by BaseMARLExperiment.eval_env.
-eval_episodes: 200
-# Sparse basin radius on ||ball - goal||: 10x the native success predicate
-# (0.01), below the corridor half-width (0.125) so "inside" means "at the goal".
-# Baked into the recorded demonstration rewards - changing it requires
-# re-collecting demos in R2BC with the matching threshold.
-gt_radius: 0.1
+# Evaluate every 4th iteration (plus the final one) = 20 evals over 600k steps.
+# Eval is ~64% of an iteration on buzz_wire (400 sequential env steps vs
+# collection's 200) and is side-effect-free, so this buys wall time at the cost
+# of curve resolution only. Wider sub-env batch also means one eval rollout now
+# yields 40 episodes instead of 20 -- better statistics, half the rollouts.
+eval_interval: 4
+# Sparse success uses VMAS's native ball-on-goal predicate (distance <= 0.01).
 
 # UTD parity with the pilot: 8000 frames/iter x 0.25 = 2000 optimiser steps,
 # i.e. 75 x 2000 = 150,000 total gradient steps, identical to 300 x 500. The

@@ -1,6 +1,7 @@
 from torchrl.envs import VmasEnv, TransformedEnv, check_env_specs
 from torchrl.envs.transforms import RewardSum, StepCounter
 from src.environment.transforms.registry import build_transforms
+from src.environment.scenarios.balance_sparse import SparseRewardBalanceScenario
 from src.environment.scenarios.buzz_wire_sparse import SparseRewardBuzzWireScenario
 from src.environment.scenarios.navigation_terminal import TerminalSuccessNavigationScenario
 
@@ -102,6 +103,9 @@ def resolve_scenario(config: dict):
     if scenario == "navigation" and binary:
         print("Using TerminalSuccessNavigationScenario (per-agent binary terminal reward)")
         return TerminalSuccessNavigationScenario()
+    if scenario == "balance" and sparse:
+        print("Using SparseRewardBalanceScenario (native on-goal predicate)")
+        return SparseRewardBalanceScenario()
     return scenario
 
 

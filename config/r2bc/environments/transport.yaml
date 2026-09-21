@@ -1,0 +1,7 @@
+n: 3
+horizon: 600
+hidden_size: 32
+expert_pth: heuristic
+training:
+  total_demonstrations: 480
+  total_samples: 24
