@@ -93,9 +93,21 @@ class ResumeMixin:
 
         # Swap in atomically-ish: a crash mid-write leaves the previous resume
         # point intact rather than a half-written one.
+        # Install the new point without ever leaving the run with no valid
+        # point on disk.  Deleting the previous point BEFORE renaming the new
+        # one in left a gap in which a kill -- the walltime guard in
+        # slurm/run_sweep.slurm sends SIGINT at a fixed wall time -- would
+        # have cost the whole run.  Retire the old point by rename (atomic),
+        # install the new one by rename (atomic), only then delete the old;
+        # load_resume recovers a retired point if the middle step never ran.
+        old_dir = self.resume_dir.with_name(self.resume_dir.name + ".old")
+        if old_dir.exists():
+            shutil.rmtree(old_dir)
         if self.resume_dir.exists():
-            shutil.rmtree(self.resume_dir)
+            self.resume_dir.rename(old_dir)
         tmp_dir.rename(self.resume_dir)
+        if old_dir.exists():
+            shutil.rmtree(old_dir)
         print(f"[resume] saved at iteration {iteration} -> {self.resume_dir}")
 
     def load_resume(self) -> int:
@@ -104,6 +116,12 @@ class ResumeMixin:
 
         Returns the iteration to start from (0 when there is nothing to resume).
         """
+        old_dir = self.resume_dir.with_name(self.resume_dir.name + ".old")
+        if not self._resume_state_path.exists() and (old_dir / "state.pt").exists():
+            # save_resume was killed after retiring the previous point and
+            # before installing the new one; the previous point is intact.
+            old_dir.rename(self.resume_dir)
+            print(f"[resume] recovered the retired point at {self.resume_dir}")
         if not self._resume_state_path.exists():
             return 0
 
