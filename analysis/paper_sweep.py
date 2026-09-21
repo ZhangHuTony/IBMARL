@@ -63,7 +63,8 @@ JOBS: list[tuple[str, list[int]]] = [
 
 
 def job_list(
-    only: list[str] | None, max_seeds: int | None = None
+    only: list[str] | None, max_seeds: int | None = None,
+    seeds: list[int] | None = None,
 ) -> list[tuple[str, int]]:
     """
     (variant, seed) pairs to run.  Without --only, the JOBS table.  With
@@ -72,6 +73,11 @@ def job_list(
     should not join the default sweep, e.g. the gated-imitation variants) gets
     MAIN_SEEDS.  A name registered nowhere is an error rather than a silent
     no-op, which is how a mistyped --only used to run zero jobs.
+
+    An explicit ``seeds`` list replaces every variant's seed list outright
+    (so it also reaches the 5-seed HPC sweeps for bc_eval, whose table entry
+    is 3 seeds); ``max_seeds`` then caps that list.  slurm/run_sweep.slurm
+    runs one seed GROUP per array task this way.
     """
     from analysis.paper_run import VARIANTS
 
@@ -87,10 +93,11 @@ def job_list(
                 )
             table.append((name, MAIN_SEEDS))
     jobs = []
-    for variant, seeds in table:
+    for variant, variant_seeds in table:
         if only and variant not in only:
             continue
-        for seed in seeds[:max_seeds] if max_seeds else seeds:
+        chosen = list(seeds) if seeds is not None else variant_seeds
+        for seed in chosen[:max_seeds] if max_seeds else chosen:
             jobs.append((variant, seed))
     return jobs
 
@@ -126,8 +133,9 @@ def resume_iteration(tag: str, variant: str, seed: int) -> int | None:
         return None
 
 
-def print_status(tag: str, only: list[str] | None, max_seeds: int | None = None) -> None:
-    jobs = job_list(only, max_seeds)
+def print_status(tag: str, only: list[str] | None, max_seeds: int | None = None,
+                 seeds: list[int] | None = None) -> None:
+    jobs = job_list(only, max_seeds, seeds)
     counts = {"done": 0, "partial": 0, "pending": 0}
     print(f"{'variant':<16} {'seed':>4}  {'state':<8} {'resume@':>8}")
     print("-" * 42)
@@ -171,6 +179,9 @@ def main() -> int:
     parser.add_argument("--only", default=None, help="comma-separated variants")
     parser.add_argument("--max-seeds", type=int, default=None,
                         help="Cap seeds per variant (smoke tests).")
+    parser.add_argument("--seeds", default=None,
+                        help="Comma-separated seeds to run for every selected variant, "
+                             "replacing the JOBS table's seed lists (e.g. 3,4).")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--status", action="store_true", help="print progress and exit")
     parser.add_argument(
@@ -179,12 +190,13 @@ def main() -> int:
     args = parser.parse_args()
 
     only = args.only.split(",") if args.only else None
+    seeds = [int(s) for s in args.seeds.split(",") if s.strip()] if args.seeds else None
 
     if args.status:
-        print_status(args.tag, only, args.max_seeds)
+        print_status(args.tag, only, args.max_seeds, seeds)
         return 0
 
-    jobs = job_list(only, args.max_seeds)
+    jobs = job_list(only, args.max_seeds, seeds)
     todo = [
         (v, s)
         for v, s in jobs
@@ -287,7 +299,7 @@ def main() -> int:
     if interrupted:
         print("[sweep] interrupted -- re-run to resume.")
         return 130
-    print_status(args.tag, only, args.max_seeds)
+    print_status(args.tag, only, args.max_seeds, seeds)
     return 0 if n_ok == len(completed) else 1
 
 
