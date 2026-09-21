@@ -41,8 +41,9 @@ IBMARL/
 Everything a run needs is in the checkout: the frozen teachers and their
 demonstrations are bundled under `teachers/` (see `teachers/README.md`), and the
 config artifact paths are repo-relative, resolved against the checkout by
-`src/util/paths.py`.  The one exception is transport's 91 MB demonstration file,
-which stays an absolute machine-local path.
+`src/util/paths.py`.  Transport's demonstrations, once a 95 MB machine-local file,
+are bundled too (re-saved as float32 tensors, 36.8 MB), so every task runs from
+the checkout alone.
 
 ```bash
 git clone https://github.com/ZhangHuTony/IBMARL.git && cd IBMARL

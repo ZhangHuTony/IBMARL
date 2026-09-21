@@ -5,10 +5,11 @@
 # Suboptimal heuristic teacher: 204 episodes, 122,400 transitions, dense rewards,
 # delivers the package in 9.8% of episodes.
 r2bc_checkpoint_path: "teachers/transport/policy_checkpoint.pth"
-# Stays absolute: transport's demonstrations.pt is 91 MB, too large to bundle
-# under teachers/ (see teachers/README.md), so it is the one machine-local
-# artifact.  The teacher checkpoint itself is bundled.
-demonstrations_path: "/home/tony-zhang/Research/ibmarl/R2BC/results/transport_r2bc_decent_20260821_154402/demonstrations.pt"
+# Bundled since 2026-09-21 as teachers/transport/demonstrations.pt: the R2BC
+# recording re-saved as float32 tensors (36.8 MB; the original's 95 MB was
+# pickled per-step lists of the same values, verified identical on round-trip).
+# Resolved against the checkout by src/util/paths.py like every other teacher.
+demonstrations_path: "teachers/transport/demonstrations.pt"
 
 # 122,400 demo transitions.  Navigation collects 300k frames against a 200k buffer, so its
 # demos survive to ~iter 200/300.  Transport collects 1.5M: at 200k the ring buffer wraps back
@@ -29,6 +30,7 @@ ibmarl_replay_size: 1000000
 # This task still runs the legacy -1/step sparse schema (no binary_terminal_reward
 # in its environment yaml), so the arbiter temperature stays at the value the
 # legacy Q-scale was tuned for; ibmarl.yaml's default is rescaled for the binary
-# tasks.  actor_reg keeps ibmarl.yaml's block (mode: none), so its gate
-# temperature is moot here; a gated variant on this task would need it re-pinned.
+# tasks.  The gated variants (paper_run._gated) leave the gate temperature out
+# of their actor_reg override on purpose, so the gate falls back to THIS
+# arbiter temperature rather than ibmarl.yaml's binary-schema 0.0005.
 temperature: 0.05

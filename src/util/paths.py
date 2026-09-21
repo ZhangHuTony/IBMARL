@@ -8,9 +8,9 @@ CWD == repo root, but the archived ``results/<run>/config.yaml`` snapshots are
 re-read by analysis tooling from arbitrary directories, so resolution is
 anchored on this file's location rather than on the working directory.
 
-Absolute paths pass through untouched.  That is how transport's 91 MB
-demonstration file, too large to bundle, stays a documented machine-local
-dependency (see teachers/README.md).
+Absolute paths pass through untouched, so a config can still point at a
+machine-local artifact; since 2026-09-21 none of the bundled tasks needs to
+(transport's demonstrations were re-saved compactly and bundled).
 """
 
 from pathlib import Path
