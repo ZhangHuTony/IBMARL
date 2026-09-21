@@ -56,6 +56,12 @@ ORDER = [
     "ibmarl_strict_gated_a0.1",
     "ibmarl_strict_gated_a0.4",
     "ibmarl_strict_gated_a1.6",
+    # buzzwire4: mixing + gated term is the headline method here (see
+    # paper3_figures.VARIANT_SETS); ibmarl_strict_gated_a0.4 and
+    # ibmarl_gated_a0.4_1critic already have LABEL entries from the alpha-sweep
+    # and 1critic-ablation work above, so only the two brand-new names need one.
+    "ibmarl_gated_a0.4",
+    "ibmarl_gated_a0.4_1critic",
 ]
 
 
@@ -63,6 +69,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tag", default="paper3")
     ap.add_argument("--smooth", type=int, default=None)
+    ap.add_argument("--bar", type=float, default=0.9,
+                    help="A second, FIXED success bar reported next to the teacher "
+                         "level (default 0.9).  Steps-to-teacher gets easier as the "
+                         "teacher is weakened -- the bar drops -- so a fixed bar is "
+                         "what stays comparable across sweeps with different teachers.")
     ap.add_argument("--complete-only", action="store_true",
                     help="Skip variants with any unfinished seed (status.json "
                          "missing or not ok). Use while a sweep is in flight.")
@@ -74,11 +85,13 @@ def main() -> None:
     pf.configure(args.tag, args.smooth, args.protocol)
 
     teacher = pf.bc_level()
+    bar = args.bar
+    bar_tag = f"{bar:g}"
     rows = []
-    print(f"\ntag={args.tag}  teacher level = {teacher:.1f}  "
+    print(f"\ntag={args.tag}  teacher level = {teacher:.3f}  fixed bar = {bar:g}  "
           f"(smooth={pf.SMOOTH} evals, protocol={pf.PROTOCOL})\n")
     hdr = (f"{'variant':<24} {'steps-to-teacher':>18} {'reached':>8} "
-           f"{'median(reaching)':>17} {'final return':>16}")
+           f"{'median(reaching)':>17} {'steps-to-' + bar_tag:>14} {'reached':>8} {'final return':>16}")
     print(hdr)
     print("-" * len(hdr))
 
@@ -99,17 +112,19 @@ def main() -> None:
         steps = steps_k * 1000.0
         budget = steps[-1]
 
-        per_seed, reached = [], []
-        for y in smoothed:
-            idx = np.flatnonzero(y > teacher)
-            if len(idx):
-                per_seed.append(steps[idx[0]])
-                reached.append(True)
-            else:
-                per_seed.append(budget)
-                reached.append(False)
-        per_seed = np.array(per_seed)
-        reached = np.array(reached)
+        def crossing(threshold):
+            """Per-seed first step whose smoothed value exceeds *threshold*;
+            seeds that never do are capped at the budget and flagged."""
+            per, hit = [], []
+            for y in smoothed:
+                idx = np.flatnonzero(y > threshold)
+                per.append(steps[idx[0]] if len(idx) else budget)
+                hit.append(bool(len(idx)))
+            return np.array(per), np.array(hit)
+
+        per_seed, reached = crossing(teacher)
+        per_bar, reached_bar = crossing(bar)
+        med_bar = float(np.median(per_bar))
 
         med_all = float(np.median(per_seed))
         med_reach = (float(np.median(per_seed[reached]))
@@ -125,16 +140,20 @@ def main() -> None:
             steps_to_teacher_median=med_all,
             steps_to_teacher_median_reaching=med_reach,
             capped_at_budget=capped,
+            **{f"steps_to_{bar_tag}_median": med_bar,
+               f"n_reached_{bar_tag}": int(reached_bar.sum())},
             final_return_mean=float(finals.mean()),
             final_return_sd=float(finals.std(ddof=1)) if len(finals) > 1 else 0.0,
         ))
         flag = "†" if capped else " "
         med_reach_s = ("--".rjust(16) if np.isnan(med_reach)
                        else f"{med_reach/1000:>15.0f}k")
+        flag_bar = "†" if not reached_bar.all() else " "
         print(f"{pf.LABEL[variant]:<24} {med_all/1000:>15.0f}k{flag} "
               f"{reached.sum():>4}/{len(per_seed):<3} "
               f"{med_reach_s}  "
-              f"{finals.mean():>8.1f} ± {rows[-1]['final_return_sd']:.1f}")
+              f"{med_bar/1000:>11.0f}k{flag_bar} {reached_bar.sum():>4}/{len(per_bar):<3} "
+              f"{finals.mean():>8.2f} ± {rows[-1]['final_return_sd']:.2f}")
 
     import pandas as pd
     out = pf.OUT / ("steps_to_teacher.csv" if pf.PROTOCOL == "rl"

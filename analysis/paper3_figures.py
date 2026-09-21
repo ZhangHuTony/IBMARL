@@ -57,8 +57,30 @@ PRESETS["buzzwire3"] = dict(PRESETS["buzzwire1"])
 # buzzwire3_reg (gated imitation term on top of buzzwire3's ibmarl_strict, the
 # baseline and bc_eval symlinked from buzzwire3) -- same budget and cadence.
 PRESETS["buzzwire3_reg"] = dict(PRESETS["buzzwire1"])
+# buzzwire4 (binary_terminal_reward, 6-demo teacher; ibmarl_gated_a0.4 is the
+# headline method as of paper_run.py's 2026-09-20 registration) -- same 600k
+# budget and eval_interval, but returns are success rates in [0, 1] under the
+# binary terminal schema, not the legacy -1/step return the axes above are
+# scaled for.  Directory layout matches the others via symlinks (see
+# results/buzzwire4/README or the run that created them): the SLURM array's
+# per-task tags (buzzwire4b_<variant>/<variant>/seed_N, buzzwire4_maddpg/maddpg)
+# are symlinked to results/buzzwire4/<variant> the same way buzzwire2/3
+# symlink their baselines from buzzwire1.
+PRESETS["buzzwire4"] = dict(
+    xlim=(0, 600), xticks=[0, 200, 400, 600],
+    ylim=(0, 1), yticks=[0, 0.25, 0.5, 0.75, 1.0],
+    seeds_ylim=(0, 1.05), seeds_yticks=[0, 0.25, 0.5, 0.75, 1.0],
+    smooth=3,
+    ylabel="Success rate",
+    bc_label_dy=0.03,
+)
+# buzzwire5 (detuned-demonstrator teacher, eval every 2nd iteration at 200
+# episodes, 5 seeds; baselines with a target actor, 400k replay for all, RFT
+# annealed over the full run) -- same budget and success-rate axes.  38 evals
+# instead of 19, so a 3-eval window is now ~48k steps (8% of the run).
+PRESETS["buzzwire5"] = dict(PRESETS["buzzwire4"])
 _EMPTY_PRESET = dict(xlim=None, xticks=None, ylim=None, yticks=None,
-                     seeds_ylim=None, seeds_yticks=None, smooth=9)
+                     seeds_ylim=None, seeds_yticks=None, smooth=9, ylabel=None)
 
 # Set by configure(); defaults preserve the historical single-purpose script.
 TAG = "paper3"
@@ -98,6 +120,9 @@ def configure(tag: str, smooth: int | None = None,
         if protocol not in ("rl", "executed"):
             raise ValueError(f"protocol must be 'rl' or 'executed', got {protocol!r}")
         PROTOCOL = protocol
+    variant_set = VARIANT_SETS.get(tag)
+    BASELINES[:] = variant_set["baselines"] if variant_set else _DEFAULT_BASELINES
+    ABLATIONS[:] = variant_set["ablations"] if variant_set else _DEFAULT_ABLATIONS
 
 # --- IEEEtran geometry (inches) -------------------------------------------
 COL_W = 3.487       # \columnwidth
@@ -150,6 +175,10 @@ C = {
     "ibmarl_strict_gated_a0.1": "#66C2A5",   # light teal
     "ibmarl_strict_gated_a0.4": "#1B9E77",   # teal
     "ibmarl_strict_gated_a1.6": "#0B5D47",   # dark teal
+    # buzzwire4: mixing + gated term is the headline method now (paper_run.py,
+    # 2026-09-20), so it takes over the "ours" red from ibmarl_strict.
+    "ibmarl_gated_a0.4":          "#E8253D",   # red -- ours
+    "ibmarl_gated_a0.4_1critic":  "#F293B4",   # pink -- w/o critic ensemble
 }
 LABEL = {
     "ibmarl_strict":  "IBMARL",
@@ -164,6 +193,8 @@ LABEL = {
     "ibmarl_strict_gated_a0.1": r"IBMARL + gated term ($\alpha$=0.1)",
     "ibmarl_strict_gated_a0.4": r"IBMARL + gated term ($\alpha$=0.4)",
     "ibmarl_strict_gated_a1.6": r"IBMARL + gated term ($\alpha$=1.6)",
+    "ibmarl_gated_a0.4":          "IBMARL",
+    "ibmarl_gated_a0.4_1critic":  "IBMARL w/o critic ensemble",
 }
 # Tick labels for fig_seeds' crowded categorical axis, where LABEL is too long.
 SHORT = {
@@ -177,9 +208,58 @@ SHORT = {
     "ibmarl_strict_gated_a0.1": "gated .1",
     "ibmarl_strict_gated_a0.4": "gated .4",
     "ibmarl_strict_gated_a1.6": "gated 1.6",
+    "ibmarl_gated_a0.4":          "IBMARL",
+    "ibmarl_gated_a0.4_1critic":  "w/o ens.",
 }
-BASELINES = ["ibmarl_strict", "rlfd", "rft", "maddpg"]
-ABLATIONS = ["ibmarl_strict", "ibmarl", "ibmarl_strict_hard", "ibmarl_strict_1critic"]
+# fig_seeds' x-tick labels, overridden per tag where SHORT's existing entry was
+# worded for a different sweep's framing ("ibmarl"/"ibmarl_strict_gated_a0.4"
+# read as "w/ mix"/"gated .4" from buzzwire3_reg's alpha-sweep angle; buzzwire4
+# ablates off the gated method, so "w/o gate"/"w/o mixing" is what the same
+# variant means here).  A tag or variant not listed here keeps SHORT's entry.
+SHORT_OVERRIDES = {
+    "buzzwire4": {"ibmarl": "w/o gate", "ibmarl_strict_gated_a0.4": "w/o mixing"},
+}
+SHORT_OVERRIDES["buzzwire5"] = SHORT_OVERRIDES["buzzwire4"]
+_DEFAULT_BASELINES = ["ibmarl_strict", "rlfd", "rft", "maddpg"]
+_DEFAULT_ABLATIONS = ["ibmarl_strict", "ibmarl", "ibmarl_strict_hard", "ibmarl_strict_1critic"]
+# Per-tag variant sets, for a sweep whose headline method has a different name
+# (buzzwire4's is ibmarl_gated_a0.4, not ibmarl_strict).  A tag not listed here
+# gets _DEFAULT_BASELINES/_DEFAULT_ABLATIONS, so every existing tag's output is
+# unchanged.  Applied by configure(), same as PRESETS.
+VARIANT_SETS = {
+    "buzzwire4": dict(
+        baselines=["ibmarl_gated_a0.4", "rlfd", "rft", "maddpg"],
+        # Main method first, matching every other tag's convention that
+        # ABLATIONS[0] == BASELINES[0] -- fig_seeds' ABLATIONS[1:] depends on
+        # it to avoid plotting the main method's column twice.
+        ablations=["ibmarl_gated_a0.4", "ibmarl",
+                   "ibmarl_strict_gated_a0.4", "ibmarl_gated_a0.4_1critic"],
+    ),
+}
+VARIANT_SETS["buzzwire5"] = VARIANT_SETS["buzzwire4"]
+BASELINES = list(_DEFAULT_BASELINES)
+ABLATIONS = list(_DEFAULT_ABLATIONS)
+# fig_ablation()'s legend labels drop the "IBMARL" prefix and name the removed
+# ingredient; what's removed differs by tag (buzzwire1-3 ablate mixing/soft
+# selection/critic count off ibmarl_strict, buzzwire4 ablates the gated term/
+# mixing/critic count off ibmarl_gated_a0.4), so this is keyed by tag rather
+# than reused from module-level SHORT (which serves fig_seeds' unrelated
+# crowded x-axis).
+_DEFAULT_ABLATION_SHORT = {
+    "ibmarl_strict":         "IBMARL",
+    "ibmarl":                "w/ per-agent mixing",
+    "ibmarl_strict_hard":    "w/o soft selection",
+    "ibmarl_strict_1critic": "w/o critic ensemble",
+}
+ABLATION_SHORT = {
+    "buzzwire4": {
+        "ibmarl":                    "w/o gated term",
+        "ibmarl_gated_a0.4":         "IBMARL",
+        "ibmarl_strict_gated_a0.4":  "w/o mixing",
+        "ibmarl_gated_a0.4_1critic": "w/o critic ensemble",
+    },
+}
+ABLATION_SHORT["buzzwire5"] = ABLATION_SHORT["buzzwire4"]
 
 RETURN_LABEL = "Episode return"
 
@@ -273,7 +353,7 @@ def style_return_axis(ax, title=None, ylabel=True, xlabel=True):
     if xlabel:
         ax.set_xlabel(r"Interaction steps ($\times$1000)")
     if ylabel:
-        ax.set_ylabel(RETURN_LABEL)
+        ax.set_ylabel(PRESET.get("ylabel") or RETURN_LABEL)
     ax.spines[["top", "right"]].set_visible(False)
 
 
@@ -326,12 +406,7 @@ def fig_main():
 # ============================== Figure 2 ==================================
 def fig_ablation():
     """Ablation learning curves, single-column, matching fig1's layout."""
-    short = {
-        "ibmarl_strict":         "IBMARL",
-        "ibmarl":                "w/ per-agent mixing",
-        "ibmarl_strict_hard":    "w/o soft selection",
-        "ibmarl_strict_1critic": "w/o critic ensemble",
-    }
+    short = ABLATION_SHORT.get(TAG, _DEFAULT_ABLATION_SHORT)
     fig, ax = plt.subplots(figsize=(COL_W, 2.45))
     for v in ABLATIONS:
         # A sweep need not carry every ablation (buzzwire2 runs only the two
@@ -373,20 +448,25 @@ def fig_seeds():
         ax.hlines(finals.mean(), i - 0.28, i + 0.28, color=C[v], lw=1.6, zorder=2)
     ax.axhline(bc, color=C["bc"], ls=(0, (4, 2.5)), lw=1.0, zorder=1)
     ax.set_xlim(-0.6, len(order) - 0.4)
-    ax.text(len(order) - 0.5, bc + 1.2, "R2BC", fontsize=7, color=C["bc"], ha="right")
+    # Offset sized per-preset: 1.2 (the historical default) reads fine against
+    # the legacy return scale (tens of units) but would push the label off a
+    # [0, 1]-ranged success-rate axis invisibly, with no error to flag it.
+    ax.text(len(order) - 0.5, bc + PRESET.get("bc_label_dy", 1.2), "R2BC",
+            fontsize=7, color=C["bc"], ha="right")
     # Divider between the baseline block and the ablation block, and tick labels,
     # both derived from `order` -- a hardcoded 7 labels crashed the figure as
     # soon as --exclude or a missing ablation shortened it.
     ax.axvline(len(BASELINES) - 0.5, color="0.8", lw=0.6, zorder=0)
+    overrides = SHORT_OVERRIDES.get(TAG, {})
     ax.set_xticks(range(len(order)))
-    ax.set_xticklabels([SHORT[v] for v in order], rotation=25, ha="right",
-                       fontsize=6.8)
+    ax.set_xticklabels([overrides.get(v, SHORT[v]) for v in order], rotation=25,
+                       ha="right", fontsize=6.8)
     ax.tick_params(axis="x", pad=1)
     if PRESET["seeds_ylim"]:
         ax.set_ylim(*PRESET["seeds_ylim"])
     if PRESET["seeds_yticks"]:
         ax.set_yticks(PRESET["seeds_yticks"])
-    ax.set_ylabel(f"Final {RETURN_LABEL.lower()}")
+    ax.set_ylabel(f"Final {(PRESET.get('ylabel') or RETURN_LABEL).lower()}")
     ax.spines[["top", "right"]].set_visible(False)
     fig.subplots_adjust(left=0.165, right=0.985, top=0.965, bottom=0.235)
     save(fig, "fig3_seed_spread")
