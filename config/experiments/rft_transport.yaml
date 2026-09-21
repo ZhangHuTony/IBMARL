@@ -30,4 +30,4 @@ rft:
   # ****  TIED TO n_iters.  ALWAYS HALF OF IT.  ****
   # 800-iteration budget (results/transport800) -> 400.
   # If the budget moves, move this with it.
-  bc_anneal_n_iters: 400
+  bc_anneal_n_iters: 800

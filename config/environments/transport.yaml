@@ -12,6 +12,21 @@ horizon: 500
 # VMAS sub-envs (navigation gets 10).  Overridden here so transport sees a
 # comparable data regime; load_config merges this before computing total_frames.
 frames_per_batch: 5000
+# The 800-iteration budget (4M frames) that results/transport800 was run at via
+# --n-iters.  In the config now so that rft_transport.yaml's bc_anneal_n_iters,
+# which must equal it, is tied to something on disk rather than to a flag.
+n_iters: 800
+# Evaluation.  results/transport800's first three ibmarl_gated_a0.4 seeds ran
+# with the defaults: an eval EVERY iteration, 2 protocols x 2 rollouts of the
+# 10-sub-env batch (n_episodes 20 / 10 envs) = 4 rollouts of 500 steps per
+# iteration against 1 for collection -- measured 38 of 55 s/iteration, 70% of
+# the wall time, 12 h per run.  Every 4th iteration on a 40-sub-env eval env
+# (one rollout, 2x the episodes per point) costs ~4 s/iteration instead.
+# Training is untouched by either: evaluation runs on the dedicated eval env
+# inside vmas_rng_guard, so those three seeds are valid members of the sweep
+# and are kept; only their eval cadence differs (subsample to every 4th).
+eval_interval: 4
+eval_episodes: 40
 
 # Stage 1: native VMAS dense shaping reward.  Flip to True (or pass --sparse)
 # for the sparse setting, which routes through TransportSparseReward.
