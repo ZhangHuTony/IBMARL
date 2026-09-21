@@ -343,10 +343,18 @@ class MaddpgExperiment(BaseMARLExperiment):
         losses = {}
 
         for group, _agents in self.env.group_map.items():
+            # delay_actor: the TD target's next action comes from a Polyak
+            # target actor, as in the original DDPG/MADDPG and as IBMARL's
+            # bootstrap already does (arbiter.py uses target_rl_policies).
+            # torchrl's default is False (online actor), which buzzwire4's
+            # baselines ran with: every MADDPG/RLfD/RFT seed that collapsed did
+            # so with Q climbing past the binary schema's ceiling of 1.  RLfD
+            # and RFT inherit this method, so the change covers all three.
             loss_module = DDPGLoss(
                 actor_network = self.policies[group],
                 value_network = self.critics[group],
                 delay_value = True,
+                delay_actor = True,
             )
             loss_module.set_keys(
                 state_action_value = (group, "state_action_value"),

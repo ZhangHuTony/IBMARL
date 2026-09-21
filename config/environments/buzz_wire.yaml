@@ -16,6 +16,15 @@ horizon: 200
 # batch is very nearly free wall-time.
 frames_per_batch: 8000
 n_iters: 75
+# Replay capacity for EVERY method on this task.  base.yaml's 1,000,000 never
+# wraps over the 600k-frame budget, while IBMARL's ibmarl_replay_size (400k,
+# ibmarl_buzz_wire.yaml) evicts from iteration 50 -- an uncontrolled difference
+# between the arms in buzzwire4, and one that matters here: the baselines'
+# critics kept old successes in a never-evicting buffer while their actors
+# drifted, with Q climbing past the schema's hard ceiling of 1 (RLfD reached
+# 1.6) before every seed collapsed.  Same 400k window for all, so the buffer is
+# no longer a variable.  ibmarl_replay_size stays equal to this.
+memory_size: 400000
 # Evaluate every 4th iteration (plus the final one) = 20 evals over 600k steps.
 # Eval is ~64% of an iteration on buzz_wire (400 sequential env steps vs
 # collection's 200) and is side-effect-free, so this buys wall time at the cost
