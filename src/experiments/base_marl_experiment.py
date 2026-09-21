@@ -118,6 +118,17 @@ class BaseMARLExperiment(ResumeMixin):
         if self._eval_env is None:
             eval_config = dict(self.config)
             eval_config["seed"] = self.config.get("seed", 0) + 10_000
+            # `eval_episodes` (config/environments/<task>.yaml) sizes THIS env's
+            # batch so one rollout yields that many episodes.  make_env derives
+            # the batch as frames_per_batch // horizon, so it is expressed through
+            # frames_per_batch on the eval copy only -- the collector's env is
+            # untouched.  A wider batch is the cheap way to more episodes: VMAS is
+            # launch-bound on the GPU, so 200 sub-envs step in about the time 40
+            # do, where 5 rollouts of 40 would cost 5x.  Absent, the eval env
+            # mirrors the training batch as before.
+            n_eval = eval_config.get("eval_episodes")
+            if n_eval:
+                eval_config["frames_per_batch"] = int(n_eval) * int(eval_config.get("horizon", 100))
             self._eval_env = make_env(eval_config, self.device)
         return self._eval_env
 

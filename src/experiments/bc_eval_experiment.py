@@ -55,7 +55,10 @@ class BcEvalExperiment(BaseMARLExperiment):
 
         self._bc_td_policy.eval()
 
-        n_envs = max(int(self.env.batch_size[0]) if len(self.env.batch_size) else 1, 1)
+        # The dedicated eval env (BaseMARLExperiment.eval_env): same protocol,
+        # seed and `eval_episodes` batch as every other variant's evaluation.
+        env = self.eval_env
+        n_envs = max(int(env.batch_size[0]) if len(env.batch_size) else 1, 1)
         n_rollouts = max(1, -(-n_episodes // n_envs))  # ceil
 
         collected = {group: [] for group in self.env.group_map}
@@ -67,18 +70,18 @@ class BcEvalExperiment(BaseMARLExperiment):
                     # counted, which discards the slower ones.  Barely moves the
                     # BC number (it rarely reaches the goal) but keeps this on
                     # the same measurement protocol as every other variant.
-                    out = self.env.rollout(
+                    out = env.rollout(
                         horizon,
                         policy=self._bc_td_policy,
                         break_when_any_done=False,
                     )
-                    for group in self.env.group_map:
+                    for group in env.group_map:
                         collected[group].append(
                             self._completed_episode_returns(out, group)
                         )
 
         lines = []
-        for group in self.env.group_map:
+        for group, agents in env.group_map.items():
             ep_rewards = (
                 torch.cat(collected[group]) if collected[group] else torch.empty(0)
             )
@@ -89,8 +92,21 @@ class BcEvalExperiment(BaseMARLExperiment):
                 n_completed = ep_rewards.shape[0]
                 mean_r = ep_rewards.mean().item()
 
-            std = ep_rewards.std().item() if ep_rewards.numel() > 1 else 0.0
-            sem = std / (n_completed ** 0.5) if n_completed > 1 else 0.0
+            # Returns arrive per agent-episode.  Where the reward is team-shared
+            # (buzz_wire pays both agents together) the n_agents values of one
+            # episode are copies, so the independent sample is the EPISODE:
+            # dividing by agent-episodes understated the SEM by sqrt(n_agents).
+            # Detected from the data rather than assumed, so navigation's
+            # per-agent reward keeps its per-agent-episode SEM.
+            n_agents = max(len(agents), 1)
+            n_episodes_done = n_completed // n_agents
+            per_ep = ep_rewards.view(n_episodes_done, n_agents) if n_completed and n_completed % n_agents == 0 else None
+            team_shared = bool(per_ep is not None and per_ep.shape[0] > 0
+                               and torch.equal(per_ep.max(dim=1).values, per_ep.min(dim=1).values))
+            sample = per_ep[:, 0] if team_shared else ep_rewards
+            n_indep = int(sample.numel())
+            std = sample.std().item() if n_indep > 1 else 0.0
+            sem = std / (n_indep ** 0.5) if n_indep > 1 else 0.0
 
             # Logged so the IL reference line is a file on disk like every other
             # result, rather than a number that only exists in a console log.
@@ -101,11 +117,14 @@ class BcEvalExperiment(BaseMARLExperiment):
                 eval_reward_std=round(std, 6),
                 eval_reward_sem=round(sem, 6),
                 n_agent_episodes=n_completed,
+                n_episodes=n_episodes_done,
+                team_shared_reward=team_shared,
             )
 
             msg = (
                 f"  {group:>20s}:  mean_reward = {mean_r:+.4f} +/- {sem:.4f} "
-                f"(agent-episodes: {n_completed})"
+                f"(episodes: {n_episodes_done}, agent-episodes: {n_completed}, "
+                f"SEM over {'episodes' if team_shared else 'agent-episodes'})"
             )
             print(msg)
             lines.append(msg)
