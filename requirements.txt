@@ -15,3 +15,4 @@ matplotlib==3.10.8
 pyyaml==6.0.3
 imageio[ffmpeg]==2.37.4
 tqdm==4.67.1
+pygame==2.6.1

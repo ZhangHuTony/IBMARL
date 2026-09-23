@@ -12,6 +12,48 @@ To run RLfD:
 
 To change parameters of experiment look into config yaml files.
 
+### Human Xbox R2BC teachers
+
+Train a decentralized R2BC teacher with the paper's round-robin interaction:
+one agent is controlled with the Xbox left stick while every other agent runs
+its current cloned policy. Press **A** to begin each episode, **B** to reject the
+current episode, **START** to save and quit, and hold **RT** for precision mode.
+Agents are persistently colored and identified by the in-window legend:
+**Agent 1 = blue, Agent 2 = orange, Agent 3 = green**. The currently controlled
+agent is also named in the window before each episode.
+
+```bash
+# Local sparse binary-terminal buzz wire (2 agents, 200-step horizon)
+python -m src.r2bc.human_teleop buzz_wire --total-demonstrations 24
+
+# Default dense-reward transport (3 agents, 500-step horizon)
+python -m src.r2bc.human_teleop transport --total-demonstrations 48
+
+# Continue an autosaved run in place, up to 24 total accepted demonstrations
+python -m src.r2bc.human_teleop buzz_wire --total-demonstrations 24 \
+  --resume results/buzz_wire_r2bc_human_20260923_155838
+```
+
+On resume, `--total-demonstrations` is the cumulative target, not the number of
+additional demonstrations. The saved environment/configuration, policy,
+demonstrations, round-robin position, and (for runs saved by the current code)
+optimizer state are restored. Older human-R2BC runs do not have
+`training_state.pth`; they can still be resumed, with fresh Adam optimizer
+state and all prior demonstrations retained for cumulative BC training.
+
+The run directory is autosaved after every accepted episode and contains both
+`policy_checkpoint.pth` (directly loadable by `R2bcPolicy`) and
+`demonstrations.pt` with the existing `obs / act / rewards / next_obs / dones`
+schema. It additionally stores `terminated` and round-robin agent metadata;
+existing IBMARL/RLfD/RFT loaders ignore the metadata and consume the file as-is.
+Point the relevant experiment overlay's `r2bc_checkpoint_path` and
+`demonstrations_path` at these two files to use the human teacher.
+
+The human buzz-wire command uses
+`src/environment/scenarios/buzz_wire_sparse.py`, including its configured
+binary terminal success/collision semantics. Its saved `config.yaml`,
+`demonstrations.pt`, and `metadata.json` identify the reward mode as sparse.
+
 
 
 File Structure:

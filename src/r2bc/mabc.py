@@ -49,6 +49,7 @@ class MiniBC(torch.nn.Module):
             'in_size': self.in_size,
             'out_size': self.out_size,
             'hidden_size': self.hidden_size,
+            'hidden_layers': self.hidden_layers,
             'model_type': 'MiniBC'
         }
         torch.save(checkpoint, path)
@@ -66,7 +67,8 @@ class MiniBC(torch.nn.Module):
             agent_id=checkpoint['agent_id'],
             in_size=checkpoint['in_size'],
             out_size=checkpoint['out_size'],
-            hidden_size=checkpoint['hidden_size']
+            hidden_size=checkpoint['hidden_size'],
+            hidden_layers=checkpoint.get('hidden_layers', 1),
         )
         
         # Load state dict

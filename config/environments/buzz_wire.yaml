@@ -63,4 +63,4 @@ training:
 # episodes) and an untrained actor scores ~0.95.  Lives here because it is the
 # task definition.  The bundled demos were recorded under the legacy -1/step schema
 # and relabelled offline (analysis/relabel_demos_binary.py).
-binary_terminal_reward: True
+binary_terminal_reward: False

@@ -1,4 +1,4 @@
 # Transport-specific overlay for bc_eval -- the teacher reference line.
 # Supersedes the navigation teacher in config/experiments/bc_eval.yaml.
 # Same checkpoint IBMARL bootstraps from (see ibmarl_transport.yaml).
-r2bc_checkpoint_path: "teachers/transport/policy_checkpoint.pth"
+r2bc_checkpoint_path: "results/human_transport/policy_checkpoint.pth"
