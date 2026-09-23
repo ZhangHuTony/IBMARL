@@ -15,7 +15,7 @@ rft:
   # Number of training iterations over which lambda(t) linearly
   # anneals from 1.0 to 0.0. After this many iterations, the
   # BC regularizer is effectively turned off.
-  bc_anneal_n_iters: 150
+  bc_anneal_n_iters: 600
 
   # Optional separate batch size for BC updates; if omitted, falls back
   # to training.train_batch_size.

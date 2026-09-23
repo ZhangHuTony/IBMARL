@@ -24,9 +24,21 @@ import pandas as pd
 from matplotlib.lines import Line2D
 
 ROOT = Path(__file__).resolve().parent.parent
-RUN = ROOT / "results" / "paper3"
+RUN = ROOT / "results" / "balance_zero_one"
 OUT = ROOT / "analysis" / "figures" / "paper3"
 OUT.mkdir(parents=True, exist_ok=True)
+
+# R2BC evaluated on the exact final-evaluation seeds used by the five balance
+# IBMARL runs (seed + 10_000 + iteration 1499).  Keep this explicit rather
+# than globbing every bc_eval result: older BC runs used a different seed
+# protocol and must not move the paper's teacher reference line.
+BC_EVAL_RUNS = (
+    "bc_eval_balance_2026-09-21_10-09-49",  # seed 0
+    "bc_eval_balance_2026-09-21_10-09-55",  # seed 1
+    "bc_eval_balance_2026-09-21_10-10-01",  # seed 2
+    "bc_eval_balance_2026-09-21_10-10-07",  # seed 3
+    "bc_eval_balance_2026-09-21_10-10-13",  # seed 4
+)
 
 SMOOTH = 9          # centred rolling window, in iterations (= 1k env steps each)
 PNG_DPI = 600       # IEEE wants >= 300 dpi for raster figures
@@ -90,14 +102,14 @@ LABEL = {
     "ibmarl_strict_hard":    "IBMARL w/o soft selection",
     "ibmarl_strict_1critic": "IBMARL w/o critic ensemble",
 }
-BASELINES = ["ibmarl_strict", "rlfd", "rft", "maddpg"]
+BASELINES = ["ibmarl", "rlfd", "rft", "maddpg"]
 ABLATIONS = ["ibmarl_strict", "ibmarl", "ibmarl_strict_hard", "ibmarl_strict_1critic"]
 
 RETURN_LABEL = "Episode return"
 
 
 # --------------------------------------------------------------------------
-def load(variant, run="paper3"):
+def load(variant, run="balance_zero_one"):
     frames = [
         pd.read_csv(f)
         for f in sorted(glob.glob(str(ROOT / "results" / run / variant /
@@ -105,7 +117,8 @@ def load(variant, run="paper3"):
                         key=lambda p: int(p.split("seed_")[1].split("/")[0]))
     ]
     if not frames:
-        raise FileNotFoundError(f"{run}/{variant}")
+        raise FileNotFoundError(str(ROOT / "results" / run / variant /
+                                      "seed_*" / "data" / "metrics.csv"))
     return frames
 
 
@@ -136,19 +149,22 @@ def band(ax, variant, col, color=None):
 
 
 def bc_level():
-    vals = [pd.read_csv(f)["eval_reward_mean"].iloc[0]
-            for f in sorted(glob.glob(str(RUN / "bc_eval" / "seed_*" /
-                                          "data" / "metrics.csv")))]
+    files = [ROOT / "results" / run / "data" / "metrics.csv"
+             for run in BC_EVAL_RUNS]
+    missing = [str(path) for path in files if not path.is_file()]
+    if missing:
+        raise FileNotFoundError("Missing seed-matched BC evaluations: " + ", ".join(missing))
+    vals = [pd.read_csv(path)["eval_reward_mean"].iloc[0] for path in files]
     return float(np.mean(vals))
 
 
 def style_return_axis(ax, title=None, ylabel=True, xlabel=True):
     if title:
         ax.set_title(title, pad=4)
-    ax.set_xlim(0, 300)
-    ax.set_ylim(-100, 0)
-    ax.set_xticks([0, 100, 200, 300])
-    ax.set_yticks([-100, -80, -60, -40, -20, 0])
+    # ax.set_xlim(0, 300)
+    # ax.set_ylim(-100, 0)
+    # ax.set_xticks([0, 100, 200, 300])
+    # ax.set_yticks([-100, -80, -60, -40, -20, 0])
     if xlabel:
         ax.set_xlabel(r"Interaction steps ($\times$1000)")
     if ylabel:
@@ -173,7 +189,7 @@ def fig_main():
     ax.axhline(bc_level(), color=C["bc"], ls=(0, (4, 2.5)), lw=1.1, zorder=1,
                label="R2BC (teacher)")
     style_return_axis(ax)
-    ax.legend(loc="lower right", ncol=1, borderpad=0.2, labelspacing=0.32)
+    ax.legend(loc="upper left", ncol=1, borderpad=0.2, labelspacing=0.32)
     fig.subplots_adjust(left=0.175, right=0.968, top=0.975, bottom=0.185)
     save(fig, "fig1_main")
 
@@ -286,6 +302,6 @@ def fig_replication():
 
 if __name__ == "__main__":
     fig_main()
-    fig_ablation()
-    fig_seeds()
-    fig_replication()
+    # fig_ablation()
+    # fig_seeds()
+    # fig_replication()

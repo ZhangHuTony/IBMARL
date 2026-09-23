@@ -7,11 +7,10 @@ and prints the mean episode reward.
 import torch
 from pathlib import Path
 
-from tensordict import TensorDict
 from tensordict.nn import TensorDictModule, TensorDictSequential
 from torchrl.envs import ExplorationType, set_exploration_type
 
-from src.experiments.base_marl_experiment import BaseMARLExperiment
+from src.experiments.base_marl_experiment import BaseMARLExperiment, vmas_rng_guard
 from src.experiments.ibmarl.networks import R2bcPolicy
 
 
@@ -47,7 +46,15 @@ class BcEvalExperiment(BaseMARLExperiment):
     def train(self) -> str:
         n_episodes = 20
         horizon = self.config.get("horizon", 100)
-        max_steps = horizon * (n_episodes + 5)
+        # Match BaseMARLExperiment.evaluate(): IBMARL evaluates a dedicated
+        # environment on ``run_seed + 10_000 + training_iteration``.  A BC
+        # reference is normally evaluated for iteration 0, while
+        # ``--eval-iteration`` makes a post-hoc comparison with (for example)
+        # an IBMARL run's final logged evaluation exact.
+        eval_iteration = int(self.config.get("eval_iteration", 0))
+        if eval_iteration < 0:
+            raise ValueError("eval_iteration must be non-negative")
+        eval_seed = int(self.config.get("seed", 0)) + 10_000 + eval_iteration
 
         print(f"\n{'='*60}")
         print(f"BC Policy Evaluation  ({n_episodes} episodes)")
@@ -55,27 +62,31 @@ class BcEvalExperiment(BaseMARLExperiment):
 
         self._bc_td_policy.eval()
 
-        n_envs = max(int(self.env.batch_size[0]) if len(self.env.batch_size) else 1, 1)
+        env = self.eval_env
+        n_envs = max(int(env.batch_size[0]) if len(env.batch_size) else 1, 1)
         n_rollouts = max(1, -(-n_episodes // n_envs))  # ceil
 
         collected = {group: [] for group in self.env.group_map}
-        with torch.no_grad():
-            with set_exploration_type(ExplorationType.DETERMINISTIC):
-                for _ in range(n_rollouts):
-                    # See BaseMARLExperiment.evaluate: the default stops at the
-                    # first sub-env to finish and only ended episodes are
-                    # counted, which discards the slower ones.  Barely moves the
-                    # BC number (it rarely reaches the goal) but keeps this on
-                    # the same measurement protocol as every other variant.
-                    out = self.env.rollout(
-                        horizon,
-                        policy=self._bc_td_policy,
-                        break_when_any_done=False,
-                    )
-                    for group in self.env.group_map:
-                        ep_reward = out.get(("next", group, "episode_reward"))
-                        done = self._agent_done_mask(out, group, ep_reward)
-                        collected[group].append(ep_reward[done].float())
+        # IBMARL guards evaluation so its rollouts cannot advance the collector's
+        # VMAS RNG stream.  BC has no collector, but using the same guard and
+        # reseeding protocol makes its sampled initial states directly comparable.
+        with vmas_rng_guard():
+            self.reseed_eval_env(eval_seed)
+            with torch.no_grad():
+                with set_exploration_type(ExplorationType.DETERMINISTIC):
+                    for _ in range(n_rollouts):
+                        # See BaseMARLExperiment.evaluate: the default stops at
+                        # the first sub-env to finish and only ended episodes are
+                        # counted, which discards the slower ones.
+                        out = env.rollout(
+                            horizon,
+                            policy=self._bc_td_policy,
+                            break_when_any_done=False,
+                        )
+                        for group in self.env.group_map:
+                            ep_reward = out.get(("next", group, "episode_reward"))
+                            done = self._agent_done_mask(out, group, ep_reward)
+                            collected[group].append(ep_reward[done].float())
 
         lines = []
         for group in self.env.group_map:

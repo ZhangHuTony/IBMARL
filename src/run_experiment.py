@@ -329,6 +329,14 @@ if __name__ == "__main__":
         type=int,
         help="Total iteration target (required to extend a completed run)",
     )
+    parser.add_argument(
+        "--eval-iteration",
+        type=int,
+        help=(
+            "IBMARL iteration whose evaluation seed a bc_eval run should use "
+            "(default: 0; only valid for exp_type='bc_eval')"
+        ),
+    )
     reward_mode = parser.add_mutually_exclusive_group()
     reward_mode.add_argument(
         "--sparse",
@@ -368,7 +376,8 @@ if __name__ == "__main__":
             parser.error("scenario_name and exp_type must be omitted with --resume")
         if args.seeds != 1 or args.seed_start != 0:
             parser.error("--seeds/--seed-start cannot be used with --resume")
-        if args.sparse_rewards is not None or args.sigma_init is not None or args.sigma_end is not None:
+        if (args.sparse_rewards is not None or args.sigma_init is not None
+                or args.sigma_end is not None or args.eval_iteration is not None):
             parser.error("training hyperparameters cannot be changed with --resume")
         try:
             cfg = load_resume_config(args.resume, args.n_iters)
@@ -390,6 +399,13 @@ if __name__ == "__main__":
             parser.error("--n-iters must be positive")
         cfg["n_iters"] = args.n_iters
         cfg["total_frames"] = int(cfg["frames_per_batch"]) * args.n_iters
+
+    if args.eval_iteration is not None:
+        if cfg.get("exp_type") != "bc_eval":
+            parser.error("--eval-iteration is only valid when exp_type='bc_eval'")
+        if args.eval_iteration < 0:
+            parser.error("--eval-iteration must be non-negative")
+        cfg["eval_iteration"] = args.eval_iteration
 
     # Reward-mode override.  Unlike --sigma_init/--sigma_end this is not gated
     # on exp_type: every algorithm reads sparse_rewards through make_env.
