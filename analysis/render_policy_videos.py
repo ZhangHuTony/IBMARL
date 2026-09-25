@@ -353,20 +353,32 @@ def burn_label(frame: np.ndarray, text: str, corner_text: str | None, font) -> n
 
 def fit_label(crop, frame_shape, label: str, n_episodes: int, min_font: int = 12):
     """
-    Widen the crop box (symmetrically, within the frame) until the burned-in
-    label and the episode counter fit side by side; returns (crop, font).
-    A tall, narrow crop such as the buzz-wire corridor is otherwise narrower
-    than its own caption.
+    Make the burned-in label and the episode counter fit side by side: first
+    by shrinking the font (down to *min_font*), then, for a crop narrower than
+    the frame (the buzz-wire corridor), by widening the crop symmetrically
+    within the frame.  Returns (crop, font).
     """
     from PIL import ImageDraw, Image
     y0, y1, x0, x1 = crop
     H, W = frame_shape[:2]
-    font = _font(max(min_font, (x1 - x0) // 22))
     draw = ImageDraw.Draw(Image.new("RGB", (8, 8)))
-    m = max(4, (x1 - x0) // 60)
-    need = draw.textbbox((0, 0), label, font=font)[2] + 3 * m
-    if n_episodes > 1:
-        need += draw.textbbox((0, 0), f"episode {n_episodes}/{n_episodes}", font=font)[2] + 3 * m
+    counter = f"episode {n_episodes}/{n_episodes}" if n_episodes > 1 else None
+
+    def needed(font):
+        m = max(4, (x1 - x0) // 60)
+        w = draw.textbbox((0, 0), label, font=font)[2] + 3 * m
+        if counter:
+            w += draw.textbbox((0, 0), counter, font=font)[2] + 3 * m
+        return w
+
+    size = max(min_font, (x1 - x0) // 22)
+    font = _font(size)
+    need = needed(font)
+    # A wide frame: the crop cannot grow past the frame, so the font gives way.
+    while need > W and size > min_font:
+        size = max(min_font, size - 2)
+        font = _font(size)
+        need = needed(font)
     if need > (x1 - x0):
         extra = need - (x1 - x0)
         x0 = max(0, x0 - extra // 2)
