@@ -94,7 +94,10 @@ rc=$?
 set -e
 if [ $rc -eq 124 ]; then
   echo "walltime: stopped at $RUN_TIMEOUT, resubmitting index $SLURM_ARRAY_TASK_ID to continue from the group's resume points"
-  sbatch -J "$SLURM_JOB_NAME" --export=ALL --array="$SLURM_ARRAY_TASK_ID" "$SCRIPT"
+  # Resubmit to the account/partition this task actually ran under (a
+  # command-line -A/-p override would otherwise be lost to the #SBATCH header).
+  sbatch -J "$SLURM_JOB_NAME" -A "$SLURM_JOB_ACCOUNT" -p "$SLURM_JOB_PARTITION" \
+    --export=ALL --array="$SLURM_ARRAY_TASK_ID" "$SCRIPT"
   exit 0
 fi
 exit $rc
