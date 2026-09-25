@@ -9,8 +9,8 @@ that task's arms, in a poster-sized style.
 
 Outputs (poster/):
   fig_main.{pdf,png}      Navigation | Buzz-wire | Transport: MADDPG, RLfD, RFT,
-                          the R2BC teacher line, IBMARL under both protocols
-                          (solid = RL actors only, dashed = executed RL+IL).
+                          IBMARL and the R2BC teacher line, every method
+                          evaluated with its RL actors alone.
   fig_ablation.{pdf,png}  IBMARL (both protocols), w/o gated term (both), w/o
                           mixing (RL actors), teacher line.
   fig_human.{pdf,png}     Buzz-wire with the human Xbox teacher: IBMARL (both
@@ -80,8 +80,10 @@ def default_tasks(nav_tag: str, bw_tag: str, tr_tag: str) -> list[TaskSpec]:
                                     ("buzzwire", "Buzz-wire", "buzzwire3", bw_tag),
                                     ("transport", "Transport", "transport800", tr_tag)):
         t = TaskSpec(key, title, preset, (tag, "bc_eval"))
+        # Main comparison: every method under the same protocol, its RL actors
+        # alone -- the executed RL+IL curve lives in the ablation figure.
         t.main = [Row(tag, "maddpg", "MADDPG"), Row(tag, "rlfd", "RLfD"), Row(tag, "rft", "RFT"),
-                  Row(tag, "ibmarl_gated_a0.4", "IBMARL", both)]
+                  Row(tag, "ibmarl_gated_a0.4", "IBMARL")]
         t.ablation = [Row(tag, "ibmarl_gated_a0.4", "IBMARL", both),
                       Row(tag, "ibmarl", "w/o gated term", both),
                       Row(tag, "ibmarl_strict_gated_a0.4", "w/o mixing")]
