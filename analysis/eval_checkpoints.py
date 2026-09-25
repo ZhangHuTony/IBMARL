@@ -67,6 +67,7 @@ import torch
 import yaml
 
 from src.experiments.base_marl_experiment import BaseMARLExperiment, vmas_rng_guard
+from src.util.paths import resolve_path
 
 
 class _CheckpointEvaluator(BaseMARLExperiment):

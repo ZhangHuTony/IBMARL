@@ -18,6 +18,8 @@ working directory.
 | buzz_wire | `buzzwire_r2bc_decent_20260921_021440` — 6 demos of a detuned demonstrator, gain 0.9 (`--total_demonstrations 6 --total_samples 3 --move_factor 0.9`) | same four |
 | balance | `balance_r2bc_decent_20260823_185058` | `policy_checkpoint.pth`, `demonstrations.pt`, `metadata.json` |
 | transport | `transport_r2bc_decent_20260821_154402` — 204 episodes of the suboptimal heuristic, dense rewards | `policy_checkpoint.pth`, `demonstrations.pt` (float32 tensors, 36.8 MB; bundled 2026-09-21), `metadata.json` |
+| buzz_wire_12demo | `buzzwire_r2bc_decent_20260826_225653` — 12 demos of the tuned demonstrator (gain 4.0); the teacher of the legacy-schema sweeps buzzwire3 / buzzwire3_reg (bc_eval -137.5), re-bundled 2026-09-24 for the poster's legacy runs (`config/legacy/buzz_wire/*.yaml`) | `policy_checkpoint.pth`, `demonstrations.pt`, `metadata.json` |
+| human_buzz_wire_24_demos | human Xbox teleoperation, 2026-09-23 (`src/r2bc/human_teleop.py` on the collaborator's checkout, branch `feat-human-demos`): 24 round-robin episodes, one agent driven per episode, 13 of 24 reach the basin; legacy -1/step schema, fixed 200-step horizon | `policy_checkpoint.pth` (BC teacher trained at collection, bc_eval -143.4 +/- 0.7 over 3 seeds), `demonstrations.pt` (raw, format_version 2), `demonstrations_legacy.pt` (what the loaders read, see below), `metadata.json`, `config.yaml`, `training_state.pth` |
 
 `metadata.json` is R2BC's own record of the collection command line.  The runs'
 `config.yaml`, `metrics.csv` and media are deliberately left behind: they carry
@@ -79,3 +81,18 @@ keeps two quirks the loader is immune to (see `ibmarl_transport.yaml`): rows
 are 2-env interleaved, and `dones` is the package-on-goal flag rather than a
 terminal; `load_demonstrations_into_buffer` reads each row as a self-contained
 transition and sets `terminated` to all-False.
+
+## Human recordings
+
+`teachers/human_*_demos/demonstrations.pt` are `torch.save` dicts of tensors
+(`obs / act / rewards [N,A,1] / next_obs / dones / terminated / meta`), rows
+episode-contiguous (not env-interleaved), with `meta.controlled_agent` naming
+the human-driven agent of each row.  The recorder flags EVERY episode end as
+`terminated`, time limits included, which `src/util/demonstrations.py` would
+read as true terminals.  `analysis/prepare_human_demos.py` writes
+`demonstrations_legacy.pt` with those flags corrected (buzz_wire: all cleared,
+the legacy schema has no terminal; transport: kept only at the 5 delivered
+episodes of 90) and everything else identical; the configs point at that file.
+The transport recording (`human_transport_90_demos`, 90 episodes, dense
+reward, 5 deliveries) is prepared the same way but not bundled in git (27 MB)
+and not used by any sweep yet.

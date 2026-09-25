@@ -15,6 +15,32 @@ from src.experiments.ibmarl.networks import R2bcPolicy
 from src.util.paths import resolve_path
 
 
+def build_teacher_td_policy(bc_policy: R2bcPolicy, group_map) -> TensorDictSequential:
+    """
+    Wrap ``R2bcPolicy.get_action`` into TensorDictModules so ``env.rollout``
+    can drive the frozen teacher directly.  Module-level so that tooling
+    which only needs a teacher rollout (analysis/render_policy_videos.py) can
+    build one without instantiating an experiment, whose constructor builds
+    the full training environment and a metrics logger.
+    """
+    modules = []
+    for group in group_map:
+        def _forward(obs, _group=group):
+            if obs.dim() == 2:
+                obs = obs.unsqueeze(0)
+                return bc_policy.get_action(_group, obs).squeeze(0)
+            return bc_policy.get_action(_group, obs)
+
+        modules.append(
+            TensorDictModule(
+                _forward,
+                in_keys=[(group, "observation")],
+                out_keys=[(group, "action")],
+            )
+        )
+    return TensorDictSequential(*modules)
+
+
 class BcEvalExperiment(BaseMARLExperiment):
 
     def __init__(self, config):
@@ -26,23 +52,7 @@ class BcEvalExperiment(BaseMARLExperiment):
         self._bc_td_policy = self._wrap_bc_as_tensordict_policy()
 
     def _wrap_bc_as_tensordict_policy(self) -> TensorDictSequential:
-        """Wrap R2bcPolicy.get_action into TensorDictModules so env.rollout works."""
-        modules = []
-        for group in self.env.group_map:
-            def _forward(obs, _group=group):
-                if obs.dim() == 2:
-                    obs = obs.unsqueeze(0)
-                    return self.bc_policy.get_action(_group, obs).squeeze(0)
-                return self.bc_policy.get_action(_group, obs)
-
-            modules.append(
-                TensorDictModule(
-                    _forward,
-                    in_keys=[(group, "observation")],
-                    out_keys=[(group, "action")],
-                )
-            )
-        return TensorDictSequential(*modules)
+        return build_teacher_td_policy(self.bc_policy, self.env.group_map)
 
     def train(self) -> str:
         n_episodes = 20

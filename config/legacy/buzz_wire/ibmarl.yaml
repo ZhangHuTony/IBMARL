@@ -1,0 +1,44 @@
+# Frozen legacy base for `analysis.paper_run --base-config legacy` (poster, 2026-09-24).
+# Copied from results/buzzwire3/ibmarl/seed_0/config.yaml with the run-specific keys removed and the teacher
+# artifact paths made repo-relative. It reproduces the buzzwire3 / buzzwire3_reg sweep's settings
+# under current code -- legacy -1/step reward (no `binary_terminal_reward` key),
+# arbiter temperature 0.05, the 12-demo teacher (teachers/buzz_wire_12demo) -- so new arms
+# launched from it are comparable with the runs already on disk. Do not edit
+# the values; add a new file for a new base.
+frames_per_batch: 8000
+n_iters: 75
+memory_size: 1000000
+sparse_rewards: true
+training:
+  train_batch_size: 1024
+  lr: 1e-4
+  max_grad_norm: 1.0
+  n_optimiser_steps: 2000
+  checkpoint_interval: 10
+  gamma: 0.99
+  polyak_tau: 0.001
+  num_critic_updates: 3
+extends: ../base.yaml
+n_agents: 2
+horizon: 200
+eval_interval: 4
+gt_radius: 0.1
+total_frames: 600000
+r2bc_checkpoint_path: teachers/buzz_wire_12demo/policy_checkpoint.pth
+demonstrations_path: teachers/buzz_wire_12demo/demonstrations.pt
+ibmarl_replay_size: 400000
+ibmarl_min_warm_up_frames: 40000
+ibmarl_warm_up_policy: teacher
+strict: false
+soft: true
+temperature: 0.05
+num_critics: 3
+exploration_noise:
+  sigma_init: 0.1
+  sigma_end: 0.1
+eval_rl_only: true
+eval_critic_reduction: min_all
+scenario_name: buzz_wire
+exp_type: ibmarl
+render: false
+resume_interval: 25

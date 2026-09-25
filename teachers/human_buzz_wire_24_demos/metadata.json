@@ -1,0 +1,12 @@
+{
+  "timestamp": "20260923_161416",
+  "python_version": "3.10.12",
+  "command_line": "/home/hero/Desktop/Projects/IBMARL/src/r2bc/human_teleop.py buzz_wire --total-demonstrations 10",
+  "scenario": "buzz_wire",
+  "episodes": 24,
+  "transitions": 4800,
+  "artifact_schema": "IBMARL demonstrations.pt",
+  "reward_mode": "sparse",
+  "resume_count": 1,
+  "last_command_line": "/home/hero/Desktop/Projects/IBMARL/src/r2bc/human_teleop.py buzz_wire --total-demonstrations 24 --resume results/buzz_wire_r2bc_human_20260923_155838"
+}

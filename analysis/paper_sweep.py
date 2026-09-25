@@ -176,6 +176,9 @@ def main() -> int:
              "wall time long before the code under test has been reached.",
     )
     parser.add_argument("--resume-interval", type=int, default=25)
+    parser.add_argument("--base-config", default=None,
+                        help="Forwarded to paper_run: frozen config.yaml (or 'legacy' = "
+                             "config/legacy/<scenario>/<exp_type>.yaml) as the run's base.")
     parser.add_argument("--only", default=None, help="comma-separated variants")
     parser.add_argument("--max-seeds", type=int, default=None,
                         help="Cap seeds per variant (smoke tests).")
@@ -259,6 +262,8 @@ def main() -> int:
                 cmd += ["--n-iters", str(args.n_iters)]
             if args.n_opt_steps is not None:
                 cmd += ["--n-opt-steps", str(args.n_opt_steps)]
+            if args.base_config:
+                cmd += ["--base-config", args.base_config]
             fh = open(log_path, "a")
             fh.write(f"\n===== launch {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
             fh.flush()

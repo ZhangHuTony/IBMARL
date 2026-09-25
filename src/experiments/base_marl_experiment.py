@@ -517,8 +517,12 @@ class BaseMARLExperiment(ResumeMixin):
             if frames is None:
                 frames = list(iio.imread(str(final_mp4), index=None))
             step = max(1, len(frames) // 60)
+            # Pillow's GIF writer takes the frame delay in MILLISECONDS;
+            # step/30.0 (seconds) rounded to a 0 ms delay, so every GIF this
+            # wrote before 2026-09-24 plays at whatever speed the viewer picks.
             iio.imwrite(
-                str(gif_path), frames[::step], duration=step / 30.0, loop=0
+                str(gif_path), frames[::step],
+                duration=int(round(1000 * step / 30.0)), loop=0,
             )
             print(f"Saved {tag} GIF to: {gif_path.resolve()}")
         except Exception as e:

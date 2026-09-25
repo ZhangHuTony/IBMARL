@@ -62,7 +62,71 @@ ORDER = [
     # and 1critic-ablation work above, so only the two brand-new names need one.
     "ibmarl_gated_a0.4",
     "ibmarl_gated_a0.4_1critic",
+    # buzzwire6 human-teacher arms (poster, 2026-09-24)
+    "ibmarl_gated_a0.4_human",
+    "rft_human",
+    "rlfd_human",
 ]
+
+
+def crossing(steps, smoothed, threshold, budget):
+    """Per-seed first step whose smoothed value exceeds *threshold*; seeds
+    that never do are capped at the budget and flagged."""
+    per, hit = [], []
+    for y in smoothed:
+        idx = np.flatnonzero(y > threshold)
+        per.append(steps[idx[0]] if len(idx) else budget)
+        hit.append(bool(len(idx)))
+    return np.array(per), np.array(hit)
+
+
+def variant_stats(tag: str, variant: str, teacher: float, *, bar: float = 0.9,
+                  smooth: int | None = None, protocol: str = "rl",
+                  complete_only: bool = False) -> dict:
+    """
+    The Table-I row for one (tag, variant): steps-to-teacher (median over
+    seeds, capped at the budget), the fixed-bar crossing, and the final-10
+    return (mean, s.d., s.e.m. over seeds, plus the per-seed values).
+
+    Reads results/<tag> directly -- it does not touch paper3_figures'
+    module globals, so a caller can assemble one table from several tags
+    (analysis/poster_figures.py).  ``smooth`` defaults to the tag's preset
+    window; ``complete_only`` drops unfinished seeds instead of letting them
+    truncate the curve.  Raises FileNotFoundError when the variant has no
+    runs in the tag.
+    """
+    if smooth is None:
+        smooth = pf.PRESETS.get(tag, pf._EMPTY_PRESET).get("smooth", 9)
+    frames = pf.load(variant, run=tag, complete_only=complete_only)
+    steps_k, smoothed = pf.curve(variant, "eval_reward_mean", smooth=smooth,
+                                 protocol=protocol, run=tag,
+                                 complete_only=complete_only)
+    steps = steps_k * 1000.0
+    budget = steps[-1]
+    per_seed, reached = crossing(steps, smoothed, teacher, budget)
+    per_bar, reached_bar = crossing(steps, smoothed, bar, budget)
+    bar_tag = f"{bar:g}"
+    finals = np.array([d[pf.resolve_col(d, "eval_reward_mean", protocol)]
+                       .dropna().tail(10).mean() for d in frames])
+    med_reach = (float(np.median(per_seed[reached])) if reached.any()
+                 else float("nan"))
+    return dict(
+        variant=variant,
+        n_seeds=len(per_seed),
+        n_reached=int(reached.sum()),
+        steps_to_teacher_median=float(np.median(per_seed)),
+        steps_to_teacher_median_reaching=med_reach,
+        capped_at_budget=bool(not reached.all()),
+        **{f"steps_to_{bar_tag}_median": float(np.median(per_bar)),
+           f"n_reached_{bar_tag}": int(reached_bar.sum())},
+        final_return_mean=float(finals.mean()),
+        final_return_sd=float(finals.std(ddof=1)) if len(finals) > 1 else 0.0,
+        final_return_sem=(float(finals.std(ddof=1) / np.sqrt(len(finals)))
+                          if len(finals) > 1 else 0.0),
+        finals=[float(v) for v in finals],
+        budget=float(budget),
+        _reached_bar=reached_bar,
+    )
 
 
 def main() -> None:
@@ -97,7 +161,7 @@ def main() -> None:
 
     for variant in ORDER:
         try:
-            frames = pf.load(variant)
+            pf.load(variant)
         except FileNotFoundError:
             continue
         unfinished = unfinished_seeds(args.tag, variant)
@@ -108,52 +172,24 @@ def main() -> None:
                 print(f"  .. skipping {msg}")
                 continue
             print(f"  !! {msg} -- numbers below are provisional")
-        steps_k, smoothed = pf.curve(variant, "eval_reward_mean")
-        steps = steps_k * 1000.0
-        budget = steps[-1]
-
-        def crossing(threshold):
-            """Per-seed first step whose smoothed value exceeds *threshold*;
-            seeds that never do are capped at the budget and flagged."""
-            per, hit = [], []
-            for y in smoothed:
-                idx = np.flatnonzero(y > threshold)
-                per.append(steps[idx[0]] if len(idx) else budget)
-                hit.append(bool(len(idx)))
-            return np.array(per), np.array(hit)
-
-        per_seed, reached = crossing(teacher)
-        per_bar, reached_bar = crossing(bar)
-        med_bar = float(np.median(per_bar))
-
-        med_all = float(np.median(per_seed))
-        med_reach = (float(np.median(per_seed[reached]))
-                     if reached.any() else float("nan"))
-        finals = np.array([d[pf.resolve_col(d, "eval_reward_mean")].dropna().tail(10).mean()
-                           for d in frames])
-        capped = not reached.all()
-
-        rows.append(dict(
-            variant=variant,
-            n_seeds=len(per_seed),
-            n_reached=int(reached.sum()),
-            steps_to_teacher_median=med_all,
-            steps_to_teacher_median_reaching=med_reach,
-            capped_at_budget=capped,
-            **{f"steps_to_{bar_tag}_median": med_bar,
-               f"n_reached_{bar_tag}": int(reached_bar.sum())},
-            final_return_mean=float(finals.mean()),
-            final_return_sd=float(finals.std(ddof=1)) if len(finals) > 1 else 0.0,
-        ))
+        row = variant_stats(args.tag, variant, teacher, bar=bar,
+                            smooth=pf.SMOOTH, protocol=pf.PROTOCOL)
+        reached_bar = row.pop("_reached_bar")
+        finals = np.array(row.pop("finals"))
+        row.pop("budget")
+        rows.append(row)
+        capped = row["capped_at_budget"]
+        med_reach = row["steps_to_teacher_median_reaching"]
         flag = "†" if capped else " "
         med_reach_s = ("--".rjust(16) if np.isnan(med_reach)
                        else f"{med_reach/1000:>15.0f}k")
         flag_bar = "†" if not reached_bar.all() else " "
-        print(f"{pf.LABEL[variant]:<24} {med_all/1000:>15.0f}k{flag} "
-              f"{reached.sum():>4}/{len(per_seed):<3} "
+        print(f"{pf.LABEL[variant]:<24} {row['steps_to_teacher_median']/1000:>15.0f}k{flag} "
+              f"{row['n_reached']:>4}/{row['n_seeds']:<3} "
               f"{med_reach_s}  "
-              f"{med_bar/1000:>11.0f}k{flag_bar} {reached_bar.sum():>4}/{len(per_bar):<3} "
-              f"{finals.mean():>8.2f} ± {rows[-1]['final_return_sd']:.2f}")
+              f"{row[f'steps_to_{bar_tag}_median']/1000:>11.0f}k{flag_bar} "
+              f"{row[f'n_reached_{bar_tag}']:>4}/{row['n_seeds']:<3} "
+              f"{finals.mean():>8.2f} ± {row['final_return_sd']:.2f}")
 
     import pandas as pd
     out = pf.OUT / ("steps_to_teacher.csv" if pf.PROTOCOL == "rl"

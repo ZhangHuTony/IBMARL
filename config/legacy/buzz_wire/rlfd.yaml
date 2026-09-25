@@ -1,0 +1,31 @@
+# Frozen legacy base for `analysis.paper_run --base-config legacy` (poster, 2026-09-24).
+# Copied from results/buzzwire3/rlfd/seed_0/config.yaml with the run-specific keys removed and the teacher
+# artifact paths made repo-relative. It reproduces the buzzwire3 sweep's settings
+# under current code -- legacy -1/step reward (no `binary_terminal_reward` key),
+# arbiter temperature 0.05, the 12-demo teacher's demonstrations (teachers/buzz_wire_12demo) -- so new arms
+# launched from it are comparable with the runs already on disk. Do not edit
+# the values; add a new file for a new base.
+frames_per_batch: 8000
+n_iters: 75
+memory_size: 1000000
+sparse_rewards: true
+training:
+  train_batch_size: 1024
+  lr: 1e-4
+  max_grad_norm: 1.0
+  n_optimiser_steps: 2000
+  checkpoint_interval: 10
+  gamma: 0.99
+  polyak_tau: 0.001
+  num_critic_updates: 3
+extends: ../base.yaml
+n_agents: 2
+horizon: 200
+eval_interval: 4
+gt_radius: 0.1
+total_frames: 600000
+demonstrations_path: teachers/buzz_wire_12demo/demonstrations.pt
+scenario_name: buzz_wire
+exp_type: rlfd
+render: false
+resume_interval: 25

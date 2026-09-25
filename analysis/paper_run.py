@@ -102,6 +102,64 @@ VARIANTS["ibmarl_gated_a0.4"] = _gated(0.4, strict=False)
 # answers the standing objection that IBMARL gets 3 critics to each baseline's 1.
 VARIANTS["ibmarl_gated_a0.4_1critic"] = _gated(0.4, strict=False, num_critics=1)
 
+# --- human-teacher arms (results/buzzwire6; poster, 2026-09-24) -------------
+# The same methods with the human Xbox teacher in place of the heuristic
+# demonstrator's (teachers/human_buzz_wire_24_demos, see teachers/README.md).
+# That recording is the legacy -1/step schema, so these run on the frozen
+# legacy bases (--base-config legacy); demonstrations_legacy.pt is the
+# recording with its 24 time-limit ends unflagged as terminals
+# (analysis/prepare_human_demos.py).  The overrides ride the flat cfg.update
+# like every other variant, so they apply on any base.
+_HUMAN_BW = {
+    "r2bc_checkpoint_path": "teachers/human_buzz_wire_24_demos/policy_checkpoint.pth",
+    "demonstrations_path": "teachers/human_buzz_wire_24_demos/demonstrations_legacy.pt",
+}
+VARIANTS["bc_eval_human"] = ("bc_eval", dict(_HUMAN_BW))
+VARIANTS["rlfd_human"] = ("rlfd", dict(_HUMAN_BW))
+VARIANTS["rft_human"] = ("rft", dict(_HUMAN_BW))
+VARIANTS["ibmarl_gated_a0.4_human"] = _gated(0.4, strict=False, **_HUMAN_BW)
+
+# Keys build_cfg (re)assigns for every run; a frozen config.yaml carries its
+# original run's values for them and they must not leak into a new run.
+RUN_KEYS = ("variant", "run_name", "run_dir", "data_dir", "check_dir",
+            "videos_dir", "plots_dir", "seed")
+
+
+def load_base_config(base_config: str, scenario: str, exp_type: str) -> dict:
+    """
+    A frozen ``config.yaml`` as the base of a run, in place of the live yaml
+    stack (``load_config``).  ``"legacy"`` selects
+    ``config/legacy/<scenario>/<exp_type>.yaml``, the bases copied from the
+    sweeps the poster reuses (paper4, buzzwire3); anything else is a path.
+
+    Why: the live stack moves (reward schema, arbiter temperature, teacher,
+    replay size, eval cadence), so a new arm launched from it is not
+    comparable with the runs already on disk.  A frozen base is a bit-for-bit
+    copy of what those runs saw, and the variant's overrides are applied on
+    top exactly as they are on the live stack.  The scenario and exp_type
+    embedded in the file must match the run, or a buzz-wire base could
+    silently drive a navigation run.
+    """
+    if base_config == "legacy":
+        path = Path("config/legacy") / scenario / f"{exp_type}.yaml"
+    else:
+        path = Path(base_config)
+    if not path.exists():
+        raise FileNotFoundError(f"--base-config: {path} does not exist")
+    with open(path) as f:
+        cfg = yaml.safe_load(f) or {}
+    for key in RUN_KEYS:
+        cfg.pop(key, None)
+    for key, want in (("scenario_name", scenario), ("exp_type", exp_type)):
+        have = cfg.get(key)
+        if have != want:
+            raise ValueError(
+                f"--base-config {path}: {key}={have!r}, but this run is {want!r}"
+            )
+    cfg["base_config"] = str(path)
+    print(f"[paper_run] base config: {path}")
+    return cfg
+
 
 def build_cfg(
     variant: str,
@@ -113,16 +171,39 @@ def build_cfg(
     resume_interval: int | None = None,
     sigma_init: float | None = None,
     sigma_end: float | None = None,
+    base_config: str | None = None,
 ) -> dict:
     if variant not in VARIANTS:
         raise KeyError(f"Unknown variant {variant!r}. Known: {sorted(VARIANTS)}")
     exp_type, overrides = VARIANTS[variant]
 
-    cfg = load_config(scenario, exp_type)
+    if base_config:
+        cfg = load_base_config(base_config, scenario, exp_type)
+    else:
+        cfg = load_config(scenario, exp_type)
     cfg.update(overrides)
     cfg["seed"] = seed
     cfg["render"] = False
     if n_iters is not None:
+        # RFT's BC term anneals over `rft.bc_anneal_n_iters` iterations, which is
+        # only meaningful as a FRACTION of the budget -- the overlays say so in
+        # capitals (config/experiments/rft_transport.yaml) and the project has
+        # got it wrong in both directions.  --n-iters silently left it behind,
+        # so an 800-iteration overlay under a 1200-iteration run would anneal
+        # over 67% instead of the 100% it was set for, quietly making RFT a
+        # different method.  Rescale it by the same factor as the budget, which
+        # preserves whatever ratio the overlay actually encodes rather than
+        # assuming half or full.
+        base_iters = cfg.get("n_iters")
+        rft_cfg = cfg.get("rft")
+        if (isinstance(rft_cfg, dict) and rft_cfg.get("bc_anneal_n_iters")
+                and base_iters):
+            scaled = round(int(rft_cfg["bc_anneal_n_iters"]) * n_iters / int(base_iters))
+            if scaled != rft_cfg["bc_anneal_n_iters"]:
+                print(f"[paper_run] budget {base_iters} -> {n_iters}: "
+                      f"rft.bc_anneal_n_iters {rft_cfg['bc_anneal_n_iters']} -> {scaled} "
+                      f"(ratio {int(rft_cfg['bc_anneal_n_iters'])/int(base_iters):.2f} kept)")
+            cfg["rft"] = dict(rft_cfg, bc_anneal_n_iters=scaled)
         cfg["n_iters"] = n_iters
         cfg["total_frames"] = cfg["frames_per_batch"] * n_iters
     if n_opt_steps is not None:
@@ -199,6 +280,12 @@ def main() -> int:
         default=None,
         help="Iterations between mid-run resume checkpoints (default 25).",
     )
+    parser.add_argument(
+        "--base-config",
+        default=None,
+        help="Frozen config.yaml to build the run from instead of the live yaml "
+             "stack; 'legacy' = config/legacy/<scenario>/<exp_type>.yaml.",
+    )
     args = parser.parse_args()
 
     cfg = build_cfg(
@@ -211,6 +298,7 @@ def main() -> int:
         args.resume_interval,
         args.sigma_init,
         args.sigma_end,
+        args.base_config,
     )
     run_dir = Path(cfg["run_dir"])
 

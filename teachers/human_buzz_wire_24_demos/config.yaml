@@ -1,0 +1,38 @@
+seed: 42
+frames_per_batch: 8000
+n_iters: 75
+memory_size: 400000
+sparse_rewards: true
+training:
+  train_batch_size: 1024
+  lr: 1e-4
+  max_grad_norm: 1.0
+  n_optimiser_steps: 2000
+  checkpoint_interval: 10
+  gamma: 0.99
+  polyak_tau: 0.001
+extends: ../base.yaml
+n_agents: 2
+horizon: 200
+eval_interval: 2
+eval_episodes: 200
+gt_radius: 0.1
+binary_terminal_reward: false
+total_frames: 600000
+scenario_name: buzz_wire
+exp_type: r2bc_human
+human_r2bc:
+  scenario: buzz_wire
+  total_demonstrations: 10
+  output_dir: null
+  seed: 0
+  controller: 0
+  hidden_size: 8
+  hidden_layers: 1
+  epochs: 50
+  batch_size: 256
+  lr: 0.001
+  speed: 0.5
+  precision_speed: 0.2
+  deadzone: 0.1
+  step_delay: 0.01
