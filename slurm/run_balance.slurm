@@ -131,7 +131,9 @@ fi
 # a repo-local lock -- then build the run config and resolve its artifacts, so a
 # missing overlay or file fails here, not after the GPU has been held.
 mkdir -p results/_precheck
-flock --timeout 1800 results/_precheck/artifacts.lock \n  python -m analysis.ensure_demo_artifacts "$V" "$SCENARIO" \n  || { echo "pre-flight failed for $SCENARIO/$V -- git pull? see analysis/ensure_demo_artifacts.py"; exit 1; }
+flock --timeout 1800 results/_precheck/artifacts.lock \
+  python -m analysis.ensure_demo_artifacts "$V" "$SCENARIO" \
+  || { echo "pre-flight failed for $SCENARIO/$V -- git pull? see analysis/ensure_demo_artifacts.py"; exit 1; }
 
 set +e
 timeout --signal=INT "$RUN_TIMEOUT" python -m analysis.paper_sweep \
