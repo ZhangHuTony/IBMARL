@@ -6,13 +6,18 @@
 # the group's seeds share the GPU three at a time through paper_sweep --jobs 3,
 # as in run_sweep.slurm / run_poster.slurm.
 #
-# Three phases, submitted IN ORDER (the radius is pinned between B and D):
-#   B  sbatch --array=0     slurm/run_balance.slurm   # teacher audit + demo stats (minutes)
-#      -> pin gt_radius in config/environments/balance.yaml, relabel the demos
-#         (analysis/relabel_demos_sparse.py balance), commit, push, pull here.
-#   D  sbatch --array=1-13  slurm/run_balance.slurm   # balance1: 7 arms
-#   E  sbatch --array=14-20 slurm/run_balance.slurm   # transport_human1: 4 arms
-#      sbatch --array=7     slurm/run_balance.slurm   # one task, e.g. a killed one
+# One submission runs everything (the radius was chosen a priori, 0.5, see
+# config/environments/balance.yaml; the audit in task 0 reports the teacher's
+# basin-reach grid for the record and gates nothing):
+#      sbatch slurm/run_balance.slurm                  # all 21 tasks
+#      sbatch --array=1-13  slurm/run_balance.slurm    # balance1 only
+#      sbatch --array=14-20 slurm/run_balance.slurm    # transport_human1 only
+#      sbatch --array=7     slurm/run_balance.slurm    # one task, e.g. a killed one
+# Every task first runs analysis/ensure_demo_artifacts.py under flock, which
+# generates the two derived demo files that need torch to make
+# (teachers/balance/demonstrations_sparse.pt at the yaml's gt_radius, and
+# teachers/human_transport_90_demos/demonstrations_legacy.pt) if they are not
+# on disk, then checks the run's config and artifacts before the GPU is held.
 #
 # Index -> task (scenario tag variant seeds resume-interval):
 #    0  balance   balance1          audit                     -      -
@@ -108,8 +113,9 @@ cd "$REPO"
 python -c "import torch; assert torch.cuda.is_available()" || { echo "no CUDA on $(hostname)"; exit 1; }
 
 if [ "$V" = audit ]; then
-  # Phase B: the teacher's basin-reach per radius (and the demos' side of the
-  # same table).  Nothing is trained; the decision rule is printed at the end.
+  # Task 0: the teacher's basin-reach per radius (and the demos' side of the
+  # same table), for the record.  Nothing is trained; the 0.4-0.6 band check
+  # is printed at the end so a too-strong teacher is visible early.
   mkdir -p "results/$TAG/_teacher_audit"
   python -m analysis.relabel_demos_sparse "$SCENARIO" --radii "$AUDIT_RADII" --stats-only \
     | tee "results/$TAG/_teacher_audit/demo_stats.txt"
@@ -120,23 +126,12 @@ if [ "$V" = audit ]; then
   exit "${PIPESTATUS[0]}"
 fi
 
-# Pre-check: build the run config once and resolve its artifacts, so a missing
-# overlay (e.g. rft_balance.yaml) or demo file fails here, not after the GPU
-# has been held for an hour.  Writes only results/_precheck/.
-python - "$V" "$SCENARIO" <<'PY' || { echo "pre-check failed for $SCENARIO/$V -- git pull? relabelled demos committed?"; exit 1; }
-import sys
-from analysis.paper_run import build_cfg
-from src.util.paths import resolve_path
-v, scenario = sys.argv[1:3]
-cfg = build_cfg(v, scenario, 0, None, tag="_precheck")
-for key in ("r2bc_checkpoint_path", "demonstrations_path"):
-    if key in cfg:
-        p = resolve_path(cfg[key])
-        assert p.exists(), f"{key} -> {p} does not exist"
-        print(f"[pre-check] {key}: {cfg[key]}")
-print(f"[pre-check] {scenario}/{v}: n_iters {cfg.get('n_iters')}, total_frames {cfg.get('total_frames')}, "
-      f"sparse_rewards {cfg.get('sparse_rewards')}, gt_radius {cfg.get('gt_radius')}")
-PY
+# Pre-flight (see analysis/ensure_demo_artifacts.py): generate the derived demo
+# files if missing -- serialised across concurrently starting tasks by flock on
+# a repo-local lock -- then build the run config and resolve its artifacts, so a
+# missing overlay or file fails here, not after the GPU has been held.
+mkdir -p results/_precheck
+flock --timeout 1800 results/_precheck/artifacts.lock \n  python -m analysis.ensure_demo_artifacts "$V" "$SCENARIO" \n  || { echo "pre-flight failed for $SCENARIO/$V -- git pull? see analysis/ensure_demo_artifacts.py"; exit 1; }
 
 set +e
 timeout --signal=INT "$RUN_TIMEOUT" python -m analysis.paper_sweep \

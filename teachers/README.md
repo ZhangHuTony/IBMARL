@@ -20,7 +20,7 @@ working directory.
 | transport | `transport_r2bc_decent_20260821_154402` — 204 episodes of the suboptimal heuristic, dense rewards | `policy_checkpoint.pth`, `demonstrations.pt` (float32 tensors, 36.8 MB; bundled 2026-09-21), `metadata.json` |
 | buzz_wire_12demo | `buzzwire_r2bc_decent_20260826_225653` — 12 demos of the tuned demonstrator (gain 4.0); the teacher of the legacy-schema sweeps buzzwire3 / buzzwire3_reg (bc_eval -137.5), re-bundled 2026-09-24 for the poster's legacy runs (`config/legacy/buzz_wire/*.yaml`) | `policy_checkpoint.pth`, `demonstrations.pt`, `metadata.json` |
 | human_buzz_wire_24_demos | human Xbox teleoperation, 2026-09-23 (`src/r2bc/human_teleop.py` on the collaborator's checkout, branch `feat-human-demos`): 24 round-robin episodes, one agent driven per episode, 13 of 24 reach the basin; legacy -1/step schema, fixed 200-step horizon | `policy_checkpoint.pth` (BC teacher trained at collection, bc_eval -143.4 +/- 0.7 over 3 seeds), `demonstrations.pt` (raw, format_version 2), `demonstrations_legacy.pt` (what the loaders read, see below), `metadata.json`, `config.yaml`, `training_state.pth` |
-| human_transport_90_demos | human Xbox teleoperation, 2026-09-23 (same tool): 90 round-robin episodes, 43,828 rows, DENSE reward like transport's live stack, 5 of 90 deliver the package; bundled 2026-10-05 for the `transport_human1` arms (`analysis/paper_run.py::HUMAN_TEACHERS`) | `policy_checkpoint.pth` (BC teacher trained at collection, hidden 32), `demonstrations.pt` (raw, format_version 2, 13.6 MB), `demonstrations_legacy.pt` (prepared, see below), `metadata.json`, `config.yaml`, `training_state.pth` |
+| human_transport_90_demos | human Xbox teleoperation, 2026-09-23 (same tool): 90 round-robin episodes, 43,828 rows, DENSE reward like transport's live stack, 5 of 90 deliver the package; bundled 2026-10-05 for the `transport_human1` arms (`analysis/paper_run.py::HUMAN_TEACHERS`) | `policy_checkpoint.pth` (BC teacher trained at collection, hidden 32), `demonstrations.pt` (raw, format_version 2, 13.6 MB), `demonstrations_legacy.pt` (prepared, see below; generated on the cluster by `analysis/ensure_demo_artifacts.py` if absent), `metadata.json`, `config.yaml`, `training_state.pth` |
 
 `metadata.json` is R2BC's own record of the collection command line.  The runs'
 `config.yaml`, `metrics.csv` and media are deliberately left behind: they carry
@@ -66,38 +66,15 @@ sweeps load is
 ||next_obs[:, 0, 8:10]|| < gt_radius else -1` (the post-step package-goal
 offset, exactly what `BalanceSparseReward` masks on online), `dones` and
 `terminated` all-False, the on-goal flag moved to `on_goal`, and a `meta` dict
-with the radius and the per-radius statistics.  Re-run it whenever `gt_radius`
-changes; `meta.radius` says what a file was built with.  The radius itself is
-pinned by `analysis/balance_teacher_audit.py`, which rolls the checkpoint on the
-eval env and reports the fraction of episodes whose package ever enters each
-candidate radius (target 0.4-0.6, the buzz-wire precedent); the audit numbers
-are recorded in the yaml's comment.  If no radius lands the teacher in band,
-`analysis/train_bc_subset.py` refits a BC teacher on the first k episodes into
-`teachers/balance_<k>demo/`.
-
-Caveat for buzz_wire: online, wall contact ends the episode with 0, but the
-recording cannot reveal collisions (the ball is not in the observation), so
-relabelled episodes are cut at the basin regardless of an earlier touch, and
-the demo file is optimistic by however often that happens.  For the current
-teacher this matters less than it did: it is weak by being SLOW (demonstrator
-gain 0.9), so its failures are mostly arrivals past the 200-step horizon --
-3 of its 6 demos never reach the basin at all, and the other three arrive at
-steps 42 / 137 / 173.  Contact rate for this teacher is unmeasured.
-
-Teacher history on this task (6 demos throughout since 2026-09-20; measured
-under the binary schema, 400 fresh episodes):
-
-* 2026-09-20: 12-demo -> 6-demo teacher, tuned demonstrator (gain 4.0):
-  0.882 -> 0.770.  Demo count is a cliff (2: 0.010, 4: 0.037, 6: 0.770), so it
-  could not go lower.
-* 2026-09-21: demonstrator gain 4.0 -> 0.9, same 6-demo budget: 0.765 -> 0.492
-  +/- 0.025.  The gain dial is non-monotone -- 2.5 gives the STRONGEST teacher
-  (0.948, fewer wire contacts) and only below ~1.5 does slowness dominate; the
-  full grid is in `config/experiments/ibmarl_buzz_wire.yaml`.  The
-  demonstrations are swapped with the checkpoint (same run), so the demo set
-  the RLfD/RFT baselines and the IBMARL buffer pre-load consume changed too:
-  952 relabelled transitions, 3 of 6 episodes reaching the goal (buzzwire4:
-  855 and 4 of 6).  Curves recorded before this date used the gain-4.0 teacher.
+with the radius and the per-radius statistics.  `gt_radius` is 0.5, chosen a
+priori on 2026-10-05 (rationale in the yaml); `analysis/balance_teacher_audit.py`
+(task 0 of `slurm/run_balance.slurm`) reports the teacher's basin-reach at
+{0.3, 0.5, 0.75, 1.05} for the record.  The file is generated on the cluster by
+`analysis/ensure_demo_artifacts.py` (every SLURM task runs it first, and it
+regenerates the file if `meta.radius` disagrees with the yaml), so it need not
+be committed; `meta.radius` says what a file was built with.  If the teacher
+turns out too strong, `analysis/train_bc_subset.py` refits a BC teacher on the
+first k episodes into `teachers/balance_<k>demo/`.
 
 ## Transport demonstrations
 

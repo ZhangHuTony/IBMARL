@@ -30,14 +30,19 @@ sparse_rewards: True
 # the demos were recorded in (36 x exactly 300 steps).  True = every episode runs the
 # full horizon (scenarios/balance_fixed_horizon.py); False = VMAS's own termination.
 suppress_done: True
-# Basin radius.  PROVISIONAL: the balance1 batch pins this from
-# analysis/balance_teacher_audit.py -- the smallest radius in {0.3, 0.5, 0.75, 1.05} at
-# which the bundled teacher reaches the basin in 40-60% of episodes (buzz-wire's teacher
-# sits at 0.49).  Goal y ~ U[0,1] and the package starts at y ~ -0.89, so the initial
-# distance is >= ~0.9 and 1.05 is loose.  analysis/relabel_demos_sparse.py reads this
-# value, so the demos (teachers/balance/demonstrations_sparse.pt) must be re-relabelled
-# whenever it changes.  Audit result: <fill in during Phase C>.
-gt_radius: 1.05
+# Basin radius.  0.5, chosen a priori on 2026-10-05 (CHPC was down, so the batch was
+# launched without the audit as a gate): VMAS's own on-goal overlap is ~0.1, the package
+# starts >= ~0.9 from the goal (goal y ~ U[0,1], package y ~ -0.89; typically ~1.4), so
+# 0.5 pays native reward only once the package has been carried most of the way, while
+# the recording's on-goal flag (True on 15.6% of demo steps) says a 0.5 basin still
+# holds a healthy share of demo steps.  1.05 pays from the start on low goals; 0.3 is
+# nearly the overlap radius and makes the task close to binary.  Task 0 of
+# slurm/run_balance.slurm (analysis/balance_teacher_audit.py) still reports the
+# teacher's basin-reach at {0.3, 0.5, 0.75, 1.05} for the record.
+# analysis/relabel_demos_sparse.py reads this value, so the demos
+# (teachers/balance/demonstrations_sparse.pt, generated on the cluster by
+# analysis/ensure_demo_artifacts.py) must be re-relabelled whenever it changes.
+gt_radius: 0.5
 
 # Evaluation.  The default (every iteration, 2 protocols x 2 rollouts of the 10-sub-env
 # batch for 20 episodes) costs ~70% of the wall time on transport; every 2nd iteration on

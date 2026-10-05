@@ -48,10 +48,11 @@ def episode_bounds(dones: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(starts.tolist(), ends.tolist()))
 
 
-def prepare(task: str) -> dict:
+def prepare(task: str, dst: Path | None = None) -> dict:
+    """*dst* overrides the output path (analysis/ensure_demo_artifacts.py writes a temp file and renames it)."""
     spec = TASKS[task]
     src = PROJECT_ROOT / spec["dir"] / "demonstrations.pt"
-    dst = PROJECT_ROOT / spec["dir"] / "demonstrations_legacy.pt"
+    dst = Path(dst) if dst is not None else PROJECT_ROOT / spec["dir"] / "demonstrations_legacy.pt"
     d = torch.load(src, map_location="cpu", weights_only=False)
     meta = d.get("meta", {})
     assert meta.get("format_version") == 2, f"{src}: unexpected format {meta.get('format_version')}"

@@ -96,15 +96,15 @@ Returns read as −(steps spent off-goal).
 VMAS Balance with the team reward overwritten to −1 whenever the package is
 ≥ `gt_radius` from the goal, and the native VMAS reward (distance shaping and
 the fall penalty) inside; every episode runs the fixed 300-step horizon, VMAS's
-fall/on-goal terminal suppressed. The radius is pinned from the teacher audit
-(`analysis/balance_teacher_audit.py`). Same family as Sparse Navigation; not a
-binary terminal schema.
+fall/on-goal terminal suppressed. `gt_radius` is 0.5 (chosen a priori,
+2026-10-05; the teacher audit reports the alternatives). Same family as Sparse
+Navigation; not a binary terminal schema.
 _Avoid_: binary balance (that is the `binary_balance_exp` branch's 0/1 scenario)
 
 **Teacher audit**:
 Rolling a frozen teacher checkpoint on the eval env and reporting, per candidate
 radius, the fraction of episodes whose package ever enters the basin
-("basin-reach"), used to pin `gt_radius` so the teacher lands near 0.5.
+("basin-reach"), the strength measure the radius choice is judged against.
 _Avoid_: teacher success curve (that script assumes a 0/1 return)
 
 **Arbitrated evaluation**:
