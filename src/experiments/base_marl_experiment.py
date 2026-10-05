@@ -181,9 +181,12 @@ class BaseMARLExperiment(ResumeMixin):
         horizon-length rollout, which keeps the caller's "one episode per
         sub-env per rollout" arithmetic exact.
 
-        Gated on the flag because it is not a no-op elsewhere: balance already
-        terminates early (measured 1.06 dones per sub-env per rollout) and its
-        numbers must not move.
+        Gated on the flag because it is not a no-op elsewhere: dense balance
+        (sparse_rewards False, VMAS's own fall/on-goal terminal) ends early
+        (measured 1.06 dones per sub-env per rollout) and its numbers must not
+        move.  Sparse balance suppresses that terminal
+        (scenarios/balance_fixed_horizon.py), so there every sub-env completes
+        exactly one episode per horizon-length rollout anyway.
         """
         ep_reward = out.get(("next", group, "episode_reward"))  # [n_envs, T, n_agents, 1]
         if self.config.get("binary_terminal_reward", False):

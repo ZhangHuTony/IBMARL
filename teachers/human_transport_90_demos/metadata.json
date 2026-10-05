@@ -1,0 +1,12 @@
+{
+  "command_line": "/home/hero/Desktop/Projects/IBMARL/src/r2bc/human_teleop.py transport --total-demonstrations 36",
+  "timestamp": "20260923_164933",
+  "python_version": "3.10.12",
+  "last_command_line": "/home/hero/Desktop/Projects/IBMARL/src/r2bc/human_teleop.py transport --total-demonstrations 90 --resume results/human_transport",
+  "scenario": "transport",
+  "episodes": 90,
+  "transitions": 43828,
+  "artifact_schema": "IBMARL demonstrations.pt",
+  "reward_mode": "dense",
+  "resume_count": 2
+}

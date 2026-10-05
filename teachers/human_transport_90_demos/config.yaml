@@ -1,0 +1,38 @@
+seed: 42
+frames_per_batch: 5000
+n_iters: 800
+memory_size: 1000000
+sparse_rewards: false
+training:
+  train_batch_size: 1024
+  lr: 1e-4
+  max_grad_norm: 1.0
+  n_optimiser_steps: 500
+  checkpoint_interval: 10
+  gamma: 0.99
+  polyak_tau: 0.001
+extends: ../base.yaml
+n_agents: 3
+n_packages: 1
+horizon: 500
+eval_interval: 4
+eval_episodes: 40
+total_frames: 4000000
+scenario_name: transport
+exp_type: r2bc_human
+human_r2bc:
+  scenario: transport
+  total_demonstrations: 36
+  output_dir: null
+  resume: null
+  seed: 0
+  controller: 0
+  hidden_size: 32
+  hidden_layers: 1
+  epochs: 50
+  batch_size: 256
+  lr: 0.001
+  speed: 1.0
+  precision_speed: 0.25
+  deadzone: 0.1
+  step_delay: 0.01

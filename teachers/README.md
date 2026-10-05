@@ -16,10 +16,11 @@ working directory.
 |---|---|---|
 | navigation | `navigation_r2bc_decent_20260129_201300` — 24 demos, collected against a 0.4-radius sparse basin | `policy_checkpoint.pth`, `demonstrations.pt`, `demonstrations_binary.pt`, `metadata.json` |
 | buzz_wire | `buzzwire_r2bc_decent_20260921_021440` — 6 demos of a detuned demonstrator, gain 0.9 (`--total_demonstrations 6 --total_samples 3 --move_factor 0.9`) | same four |
-| balance | `balance_r2bc_decent_20260823_185058` | `policy_checkpoint.pth`, `demonstrations.pt`, `metadata.json` |
+| balance | `balance_r2bc_decent_20260823_185058` — 36 demos (10,800 rows) of a MAPPO-supervised demonstrator, DENSE VMAS reward, fixed 300-step horizon, 4-env interleaved | `policy_checkpoint.pth`, `demonstrations.pt` (raw, dense), `demonstrations_sparse.pt` (gt-in-radius relabel the sweeps load; see below), `metadata.json` |
 | transport | `transport_r2bc_decent_20260821_154402` — 204 episodes of the suboptimal heuristic, dense rewards | `policy_checkpoint.pth`, `demonstrations.pt` (float32 tensors, 36.8 MB; bundled 2026-09-21), `metadata.json` |
 | buzz_wire_12demo | `buzzwire_r2bc_decent_20260826_225653` — 12 demos of the tuned demonstrator (gain 4.0); the teacher of the legacy-schema sweeps buzzwire3 / buzzwire3_reg (bc_eval -137.5), re-bundled 2026-09-24 for the poster's legacy runs (`config/legacy/buzz_wire/*.yaml`) | `policy_checkpoint.pth`, `demonstrations.pt`, `metadata.json` |
 | human_buzz_wire_24_demos | human Xbox teleoperation, 2026-09-23 (`src/r2bc/human_teleop.py` on the collaborator's checkout, branch `feat-human-demos`): 24 round-robin episodes, one agent driven per episode, 13 of 24 reach the basin; legacy -1/step schema, fixed 200-step horizon | `policy_checkpoint.pth` (BC teacher trained at collection, bc_eval -143.4 +/- 0.7 over 3 seeds), `demonstrations.pt` (raw, format_version 2), `demonstrations_legacy.pt` (what the loaders read, see below), `metadata.json`, `config.yaml`, `training_state.pth` |
+| human_transport_90_demos | human Xbox teleoperation, 2026-09-23 (same tool): 90 round-robin episodes, 43,828 rows, DENSE reward like transport's live stack, 5 of 90 deliver the package; bundled 2026-10-05 for the `transport_human1` arms (`analysis/paper_run.py::HUMAN_TEACHERS`) | `policy_checkpoint.pth` (BC teacher trained at collection, hidden 32), `demonstrations.pt` (raw, format_version 2, 13.6 MB), `demonstrations_legacy.pt` (prepared, see below), `metadata.json`, `config.yaml`, `training_state.pth` |
 
 `metadata.json` is R2BC's own record of the collection command line.  The runs'
 `config.yaml`, `metrics.csv` and media are deliberately left behind: they carry
@@ -27,11 +28,13 @@ nothing the loaders read and are full of dead collaborator paths.
 
 ## Reward schema of the recordings
 
-Every `demonstrations.pt` was recorded under the **legacy sparse schema**:
-`-1` per step while off-goal, the native VMAS reward inside the basin, fixed
-horizon with `done()` suppressed, so `dones` is all-False and episodes are
-consecutive `horizon`-length blocks per sub-env (rows are time-major /
-env-minor: `index = t * n_envs + e`).
+The navigation and buzz_wire `demonstrations.pt` were recorded under the
+**legacy sparse schema**: `-1` per step while off-goal, the native VMAS reward
+inside the basin, fixed horizon with `done()` suppressed, so `dones` is
+all-False and episodes are consecutive `horizon`-length blocks per sub-env
+(rows are time-major / env-minor: `index = t * n_envs + e`).  Balance's and
+transport's were recorded **dense** (the raw VMAS reward; see their sections
+below), at a fixed horizon too.
 
 Navigation and buzz_wire now use the **binary terminal schema**
 (`binary_terminal_reward: True` in `config/environments/`): +1 once, on the
@@ -43,8 +46,34 @@ first step the success predicate holds, termination there, 0 otherwise.
 
 without re-simulating (navigation recovers per-agent goal distance from the
 observation; buzz_wire recovers the basin from `reward != -1`), and carries an
-extra `terminated` array plus a `meta` dict describing the result.  Balance
-still uses the legacy schema and loads `demonstrations.pt` directly.
+extra `terminated` array plus a `meta` dict describing the result.
+
+## Balance demonstrations
+
+`teachers/balance/demonstrations.pt` is R2BC's raw recording: 36 episodes of
+exactly 300 steps (the recorder suppressed VMAS's fall/on-goal terminal), rows
+4-env interleaved, rewards the DENSE VMAS values (100 x the per-step decrease
+in package-goal distance, -10 on floor contact; range -10.5 .. 0.86), and
+`dones` the recorder's mid-episode on-goal flag (1,684 True rows), not a
+terminal.  The task runs the **gt-in-radius sparse schema** since 2026-10
+(`config/environments/balance.yaml`: native reward while the package is within
+`gt_radius` of the goal, -1 per step otherwise, fixed horizon), so the file the
+sweeps load is
+
+    python -m analysis.relabel_demos_sparse balance        # radius = the yaml's gt_radius
+
+-> `demonstrations_sparse.pt`: the same rows with `reward = native if
+||next_obs[:, 0, 8:10]|| < gt_radius else -1` (the post-step package-goal
+offset, exactly what `BalanceSparseReward` masks on online), `dones` and
+`terminated` all-False, the on-goal flag moved to `on_goal`, and a `meta` dict
+with the radius and the per-radius statistics.  Re-run it whenever `gt_radius`
+changes; `meta.radius` says what a file was built with.  The radius itself is
+pinned by `analysis/balance_teacher_audit.py`, which rolls the checkpoint on the
+eval env and reports the fraction of episodes whose package ever enters each
+candidate radius (target 0.4-0.6, the buzz-wire precedent); the audit numbers
+are recorded in the yaml's comment.  If no radius lands the teacher in band,
+`analysis/train_bc_subset.py` refits a BC teacher on the first k episodes into
+`teachers/balance_<k>demo/`.
 
 Caveat for buzz_wire: online, wall contact ends the episode with 0, but the
 recording cannot reveal collisions (the ball is not in the observation), so
@@ -92,7 +121,9 @@ the human-driven agent of each row.  The recorder flags EVERY episode end as
 read as true terminals.  `analysis/prepare_human_demos.py` writes
 `demonstrations_legacy.pt` with those flags corrected (buzz_wire: all cleared,
 the legacy schema has no terminal; transport: kept only at the 5 delivered
-episodes of 90) and everything else identical; the configs point at that file.
+episodes of 90) and everything else identical; `analysis/paper_run.py`'s
+`HUMAN_TEACHERS` table points the `*_human` variants at that file per scenario.
 The transport recording (`human_transport_90_demos`, 90 episodes, dense
-reward, 5 deliveries) is prepared the same way but not bundled in git (27 MB)
-and not used by any sweep yet.
+reward, 5 deliveries; 13.6 MB raw + 13.6 MB prepared, under GitHub's 50 MB
+warning) is bundled since 2026-10-05 for the `transport_human1` arms
+(`slurm/run_balance.slurm`), which run on transport's live dense config stack.

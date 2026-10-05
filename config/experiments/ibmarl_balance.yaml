@@ -1,33 +1,52 @@
 # Balance-specific overlay for IBMARL.
 # Merged on top of config/experiments/ibmarl.yaml by load_config, so everything not
-# named here (strict/soft/num_critics/exploration_noise) keeps its default.
+# named here (strict/soft/num_critics/exploration_noise/warm-up/actor_reg) keeps its
+# default.
 
 # R2BC teacher distilled from a MAPPO supervisor: 36 demonstrations, 10,800 transitions,
-# dense rewards.  Deliberately sub-optimal budget -- R2BC's own balance.yaml notes ~-220
-# mean return at 36 demos, against ~-1700 for random actions and ~+125 for a converged
-# policy.
+# recorded with the dense VMAS reward at a fixed 300-step horizon.  Deliberately
+# sub-optimal budget -- R2BC's own balance.yaml notes ~-220 mean return at 36 demos,
+# against ~-1700 for random actions and ~+125 for a converged policy.  Its strength
+# under the sparse schema is measured by analysis/balance_teacher_audit.py, which also
+# pins the basin radius (config/environments/balance.yaml); if the teacher is too strong
+# at every radius it is refitted on a demo subset (analysis/train_bc_subset.py) and
+# these two paths move to teachers/balance_<k>demo/.
 r2bc_checkpoint_path: "teachers/balance/policy_checkpoint.pth"
-demonstrations_path: "teachers/balance/demonstrations.pt"
+# The recording relabelled to the gt-in-radius schema (analysis/relabel_demos_sparse.py:
+# native reward where the post-step package-goal distance is < gt_radius, -1 elsewhere,
+# no terminals).  The raw dense file stays beside it; loading THAT here would mix two
+# reward scales in the buffer.  Re-relabel whenever gt_radius changes.
+demonstrations_path: "teachers/balance/demonstrations_sparse.pt"
 
-# 10,800 demo transitions against 1.5M collected frames.  Navigation collects 300k against a
-# 200k buffer, so its demos survive to ~iter 200/300 (67% of the run).  At 200k here the ring
-# buffer wraps at iter 67/500 and erases the demos by ~iter 4, leaving IBMARL demo-free for
-# 99% of the run.  At 1M it wraps at iter 333/500, restoring the navigation ratio.
+# 10,800 demo transitions against 1.5M collected frames (3000 x 500, balance.yaml).
+# Navigation collects 300k against a 200k buffer, so its demos survive to ~iter 200/300
+# (67% of the run).  At 200k here the ring buffer wraps at iter 67/500 and erases the
+# demos by ~iter 4, leaving IBMARL demo-free for 99% of the run.  At 1M it wraps at
+# iter 333/500, restoring the navigation ratio.  base.yaml's memory_size is the same 1M,
+# so the buffer is not a difference between the arms.
 ibmarl_replay_size: 1000000
 
 # Two demo quirks that are deliberately NOT worked around, because this loader is immune:
-#  * The demo buffer is 4-env interleaved (next_obs[t] == obs[t+4]) -- transport's is 2.
+#  * The raw recording is 4-env interleaved (next_obs[t] == obs[t+4]) -- transport's is 2.
 #    That breaks loaders which rebuild episodes from row adjacency, but
 #    _load_demonstrations_into_buffer treats each row as a self-contained
 #    (obs, act, rew, next_obs) tuple, and next_obs[t] IS the true successor of obs[t]
-#    within its own env stream.
-#  * 'dones' is a balance-success flag, not a terminal flag (True mid-episode, never at the
-#    horizon-300 boundaries).  It cannot reach the TD target: losses.py reads
-#    ("next", group, "terminated"), which the loader sets to all-zeros.
+#    within its own env stream.  The relabelled file keeps the row order.
+#  * The recorder's 'dones' was a balance-success flag, not a terminal (True mid-episode,
+#    never at the horizon-300 boundaries).  The relabelled file moves it to 'on_goal'
+#    and writes dones/terminated all-False, matching the fixed-horizon env.
 
-# This task still runs the legacy -1/step sparse schema (no binary_terminal_reward
-# in its environment yaml), so the arbiter temperature stays at the value the
-# legacy Q-scale was tuned for; ibmarl.yaml's default is rescaled for the binary
-# tasks.  actor_reg keeps ibmarl.yaml's block (mode: none), so its gate
-# temperature is moot here; a gated variant on this task would need it re-pinned.
+# Arbiter temperature.  This task runs the -1/step family of schemas (no
+# binary_terminal_reward), so the Q-gaps between the teacher's and the RL actor's
+# proposals have the legacy scale and the temperature stays at the value that scale
+# was tuned for; ibmarl.yaml's 0.0005 is the rescaled value for the binary tasks.
+# The gated variants (paper_run._gated) leave the gate temperature out of their
+# actor_reg override on purpose, so the gate falls back to THIS value rather than
+# ibmarl.yaml's binary-schema 0.0005 -- gate temperature == arbiter temperature.
 temperature: 0.05
+
+# Warm-up: ibmarl.yaml's default (the untrained critic arbitrates the first 5k frames).
+# Flip to IBRL's teacher warm-up only if the audit shows the RL actor alone never enters
+# the basin, as on buzz-wire (see ibmarl_buzz_wire.yaml for the arithmetic):
+# ibmarl_warm_up_policy: teacher
+# ibmarl_min_warm_up_frames: 30000   # 10 iterations of 3000 frames, ~100 episodes

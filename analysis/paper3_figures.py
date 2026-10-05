@@ -127,6 +127,14 @@ PRESETS["transport800"] = dict(
 # and eval cadences as the tags they extend, so they take those presets whole.
 PRESETS["paper5"] = dict(PRESETS["paper3"])
 PRESETS["buzzwire6"] = dict(PRESETS["buzzwire3"])
+# balance1 (2026-10): gt-in-radius sparse schema, 500 iterations x 3000 frames =
+# 1.5M steps, eval every 2nd iteration (250 points).  Returns are -(steps
+# off-goal) plus the shaping earned inside the basin, so the y-range depends on
+# the radius the audit pins; left to autoscale until the first curves are in.
+# smooth=5 spans 10 iterations = 2% of the run (buzzwire3_reg's window is 10.7%,
+# transport800's 10%); widen once the curves are on disk if they need it.
+PRESETS["balance1"] = dict(_EMPTY_PRESET, xlim=(0, 1500), xticks=[0, 500, 1000, 1500],
+                           smooth=5)
 _EMPTY_PRESET = dict(xlim=None, xticks=None, ylim=None, yticks=None,
                      seeds_ylim=None, seeds_yticks=None, smooth=9, ylabel=None)
 
@@ -284,6 +292,7 @@ SHORT_OVERRIDES["buzzwire3_reg"] = {"ibmarl_strict_gated_a0.4": "IBMARL",
 SHORT_OVERRIDES["transport800"] = SHORT_OVERRIDES["buzzwire4"]
 SHORT_OVERRIDES["paper5"] = SHORT_OVERRIDES["buzzwire4"]
 SHORT_OVERRIDES["buzzwire6"] = SHORT_OVERRIDES["buzzwire4"]
+SHORT_OVERRIDES["balance1"] = SHORT_OVERRIDES["buzzwire4"]
 # A variant's colour and legend name are fixed globally, which breaks when the
 # same run is the MAIN method in one tag's figure and an ablation in another's.
 # ibmarl_strict_gated_a0.4 is buzzwire3_reg's headline method (red, "IBMARL")
@@ -348,6 +357,8 @@ VARIANT_SETS["paper5"] = dict(
     ablations=["ibmarl_gated_a0.4", "ibmarl", "ibmarl_strict_gated_a0.4"],
 )
 VARIANT_SETS["buzzwire6"] = VARIANT_SETS["paper5"]
+# balance1 runs the poster's seven arms (slurm/run_balance.slurm).
+VARIANT_SETS["balance1"] = VARIANT_SETS["paper5"]
 BASELINES = list(_DEFAULT_BASELINES)
 ABLATIONS = list(_DEFAULT_ABLATIONS)
 # fig_ablation()'s legend labels drop the "IBMARL" prefix and name the removed
@@ -380,6 +391,7 @@ ABLATION_SHORT["buzzwire3_reg"] = {
 ABLATION_SHORT["transport800"] = ABLATION_SHORT["buzzwire4"]
 ABLATION_SHORT["paper5"] = ABLATION_SHORT["buzzwire4"]
 ABLATION_SHORT["buzzwire6"] = ABLATION_SHORT["buzzwire4"]
+ABLATION_SHORT["balance1"] = ABLATION_SHORT["buzzwire4"]
 
 # Ablation figures that need more than one curve per variant.  fig_ablation()
 # uses this when the tag has an entry, and falls back to one RL-actor curve per
@@ -439,6 +451,7 @@ ABLATION_CURVES["paper5"] = [
     ("ibmarl_strict_gated_a0.4",  "rl",       "w/o mixing",          "-"),
 ]
 ABLATION_CURVES["buzzwire6"] = list(ABLATION_CURVES["paper5"])
+ABLATION_CURVES["balance1"] = list(ABLATION_CURVES["paper5"])
 # Same format as ABLATION_CURVES, for a figure that makes only the hand-off
 # point: the two mixing-arbiter variants under both protocols, with the strict
 # and single-critic ablations dropped.  fig2_ablation has to carry four
@@ -456,6 +469,7 @@ HANDOFF_CURVES = {
 HANDOFF_CURVES["transport800"] = list(HANDOFF_CURVES["buzzwire5"])
 HANDOFF_CURVES["paper5"] = list(HANDOFF_CURVES["buzzwire5"])
 HANDOFF_CURVES["buzzwire6"] = list(HANDOFF_CURVES["buzzwire5"])
+HANDOFF_CURVES["balance1"] = list(HANDOFF_CURVES["buzzwire5"])
 # Legend entries for the linestyle axis of a dual-protocol figure.
 PROTOCOL_LEGEND = {
     "rl":       ("RL actors only", "-"),

@@ -1,6 +1,7 @@
 from torchrl.envs import VmasEnv, TransformedEnv, check_env_specs
 from torchrl.envs.transforms import RewardSum, StepCounter
 from src.environment.transforms.registry import build_transforms
+from src.environment.scenarios.balance_fixed_horizon import FixedHorizonBalanceScenario
 from src.environment.scenarios.buzz_wire_sparse import SparseRewardBuzzWireScenario
 from src.environment.scenarios.navigation_terminal import TerminalSuccessNavigationScenario
 
@@ -84,7 +85,12 @@ def resolve_scenario(config: dict):
       (see src/environment/scenarios/buzz_wire_sparse.py);
     * navigation under the binary terminal schema -- a transform runs after
       the simulator has decided done(), so it cannot end the episode where the
-      reward is paid (see src/environment/scenarios/navigation_terminal.py).
+      reward is paid (see src/environment/scenarios/navigation_terminal.py);
+    * sparse balance -- the reward stays a transform (BalanceSparseReward),
+      but the native fall/on-goal terminal has to be suppressed at scenario
+      level so every episode runs the fixed horizon the demos were recorded
+      at (see src/environment/scenarios/balance_fixed_horizon.py).
+      ``suppress_done: False`` in the config keeps VMAS's own termination.
 
     A fresh instance per call is essential: the train, eval, and render envs
     each need their own simulator state.
@@ -92,6 +98,9 @@ def resolve_scenario(config: dict):
     scenario = config.get("scenario_name")
     sparse = config.get("sparse_rewards", False)
     binary = binary_terminal(config)
+    if scenario == "balance" and sparse and config.get("suppress_done", True):
+        print("Using FixedHorizonBalanceScenario (done suppressed; reward via BalanceSparseReward)")
+        return FixedHorizonBalanceScenario()
     if scenario == "buzz_wire" and sparse:
         mode = "binary terminal reward" if binary else "legacy -1/step reward + done suppression"
         print(f"Using SparseRewardBuzzWireScenario ({mode})")

@@ -1,4 +1,6 @@
 # Balance-specific overlay for RLfD -- the same demos IBMARL bootstraps from.
 # Without this, rlfd.yaml's navigation demos (18-dim obs) would be loaded into a
 # 16-dim balance buffer.
-demonstrations_path: "teachers/balance/demonstrations.pt"
+# The gt-in-radius relabelling of the recording (analysis/relabel_demos_sparse.py),
+# not the raw dense file; see ibmarl_balance.yaml.
+demonstrations_path: "teachers/balance/demonstrations_sparse.pt"

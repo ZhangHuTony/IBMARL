@@ -102,22 +102,48 @@ VARIANTS["ibmarl_gated_a0.4"] = _gated(0.4, strict=False)
 # answers the standing objection that IBMARL gets 3 critics to each baseline's 1.
 VARIANTS["ibmarl_gated_a0.4_1critic"] = _gated(0.4, strict=False, num_critics=1)
 
-# --- human-teacher arms (results/buzzwire6; poster, 2026-09-24) -------------
-# The same methods with the human Xbox teacher in place of the heuristic
-# demonstrator's (teachers/human_buzz_wire_24_demos, see teachers/README.md).
-# That recording is the legacy -1/step schema, so these run on the frozen
-# legacy bases (--base-config legacy); demonstrations_legacy.pt is the
-# recording with its 24 time-limit ends unflagged as terminals
-# (analysis/prepare_human_demos.py).  The overrides ride the flat cfg.update
-# like every other variant, so they apply on any base.
-_HUMAN_BW = {
-    "r2bc_checkpoint_path": "teachers/human_buzz_wire_24_demos/policy_checkpoint.pth",
-    "demonstrations_path": "teachers/human_buzz_wire_24_demos/demonstrations_legacy.pt",
+# --- human-teacher arms (results/buzzwire6, poster 2026-09-24; transport_human1,
+# 2026-10) ---------------------------------------------------------------------
+# The same methods with a human Xbox teacher in place of the heuristic
+# demonstrator's (teachers/human_*_demos, see teachers/README.md).  Variants
+# carry no scenario, and a teacher is per task, so the override is a MARKER
+# that build_cfg resolves through HUMAN_TEACHERS for the --scenario of the run
+# (a scenario without a human recording is a hard error, not a silent fall-back
+# to the heuristic teacher).  The resolved paths land in the run's frozen
+# config.yaml exactly as the literal paths used to, so the buzzwire6 runs on
+# disk resume unchanged.  The buzz-wire recording is the legacy -1/step schema
+# and runs on the frozen legacy bases (--base-config legacy); the transport
+# recording is dense like transport's live stack.  demonstrations_legacy.pt is
+# each recording with its time-limit ends unflagged as terminals
+# (analysis/prepare_human_demos.py).
+HUMAN_TEACHERS: dict[str, dict[str, str]] = {
+    "buzz_wire": {
+        "r2bc_checkpoint_path": "teachers/human_buzz_wire_24_demos/policy_checkpoint.pth",
+        "demonstrations_path": "teachers/human_buzz_wire_24_demos/demonstrations_legacy.pt",
+    },
+    "transport": {
+        "r2bc_checkpoint_path": "teachers/human_transport_90_demos/policy_checkpoint.pth",
+        "demonstrations_path": "teachers/human_transport_90_demos/demonstrations_legacy.pt",
+    },
 }
-VARIANTS["bc_eval_human"] = ("bc_eval", dict(_HUMAN_BW))
-VARIANTS["rlfd_human"] = ("rlfd", dict(_HUMAN_BW))
-VARIANTS["rft_human"] = ("rft", dict(_HUMAN_BW))
-VARIANTS["ibmarl_gated_a0.4_human"] = _gated(0.4, strict=False, **_HUMAN_BW)
+_HUMAN = {"human_teacher": True}
+VARIANTS["bc_eval_human"] = ("bc_eval", dict(_HUMAN))
+VARIANTS["rlfd_human"] = ("rlfd", dict(_HUMAN))
+VARIANTS["rft_human"] = ("rft", dict(_HUMAN))
+VARIANTS["ibmarl_gated_a0.4_human"] = _gated(0.4, strict=False, **_HUMAN)
+
+
+def resolve_human_teacher(cfg: dict, variant: str, scenario: str) -> None:
+    """Swap the ``human_teacher`` marker for the scenario's recording, in place."""
+    if not cfg.pop("human_teacher", False):
+        return
+    if scenario not in HUMAN_TEACHERS:
+        raise KeyError(
+            f"variant {variant!r} needs a human teacher for scenario {scenario!r}; "
+            f"recordings exist for {sorted(HUMAN_TEACHERS)} (teachers/human_*_demos)"
+        )
+    cfg.update(HUMAN_TEACHERS[scenario])
+    cfg["human_teacher"] = scenario  # recorded in the frozen config.yaml
 
 # Keys build_cfg (re)assigns for every run; a frozen config.yaml carries its
 # original run's values for them and they must not leak into a new run.
@@ -182,6 +208,7 @@ def build_cfg(
     else:
         cfg = load_config(scenario, exp_type)
     cfg.update(overrides)
+    resolve_human_teacher(cfg, variant, scenario)
     cfg["seed"] = seed
     cfg["render"] = False
     if n_iters is not None:
